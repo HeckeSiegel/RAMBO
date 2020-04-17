@@ -1,40 +1,30 @@
-import json
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
-from pyspark.sql.types import * 
-    
-spark = SparkSession \
-        .builder \
-        .appName("test") \
-        .master("local[*]") \
-        .config("spark.sql.warehouse.dir", "file:///C:/temp") \
-        .getOrCreate()
+from pyspark.sql.types import *
+import sys
+import sparkStructuredStreaming
+
+# bootstrap = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+
+streamingDF = sparkStructuredStreaming.kafka_spark_stream("127.0.0.1:9092")
+parsedDF_quotes = streamingDF.stream_quotes()
+parsedDF_news = streamingDF.stream_news()
+
+parsedDF_quotes.printSchema()
+parsedDF_news.printSchema()
+
+selectDF_quotes = parsedDF_quotes \
+        .select(explode(array("quote_data")))\
+        .select("col.companyName","col.primaryExchange","col.latestPrice","col.latestTime")\
+        .dropDuplicates(["companyName", "latestPrice", "latestTime"])
+
         
-        
-x = '[{"a": "123", "b" : "456"},{"a": "789", "b" : "101112"}]'
-d = [{'key' : 'AAP', 'value' : x}]
-df = spark.createDataFrame(d)
-df.printSchema()
-df.show()
+selectDF_news = parsedDF_news \
+        .select(explode(array("news_data")))\
+        .select("col.datetime","col.headline","col.related")\
+        .dropna().dropDuplicates(["headline"])
+                
 
-max_json_parts = 10
-#json_elements = [get_json_object(df.value, '$[%d]' %i) for i in range(10)]
-#df1 = df.select(df.key, explode(array(get_json_object(df.value, '$[%d]' %i) for i in range(10))))
-df1 = df.select(df.key, explode(array(get_json_object(df.value, '$[0]'), get_json_object(df.value, '$[1]'))))
-df1.printSchema()
-df1.show()
-
-schema = StructType() \
-        .add("a", StringType())\
-        .add("b",StringType())
-
-df2 = df1.select(df1.key, from_json(df1.col,schema).alias("data"))
-df2.printSchema()
-df2.show()
-
-df3 = df2.select(explode(array("data"))).select("col.a","col.b")
-df3.printSchema()
-df3.show()
-
-
-
+#writeDF_quotes = streamingDF.write_hdfs(selectDF_quotes,"hdfs://0.0.0.0:19000/tmp3", "hdfs://0.0.0.0:19000/test3/","companyName")        
+writeDF_news = streamingDF.write_console(selectDF_news)
+writeDF_news.awaitTermination()
