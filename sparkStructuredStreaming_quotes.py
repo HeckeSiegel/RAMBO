@@ -5,25 +5,36 @@ import sparkStructuredStreaming
 import sys
 
 # run with 
-# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 sparkStructuredStreaming_quotes.py <arg>
-# arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 sparkStructuredStreaming_quotes.py <arg1>...
+# arg1 = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+# arg2 = "hdfs://0.0.0.0:19000" (local)
+# arg3 = "iex/quotes/<date>"
  
 bootstrap = sys.argv[1]
+hdfs_path = sys.argv[2]
+output_dir = sys.argv[3]
 
-streamingDF = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
+spark = SparkSession \
+            .builder \
+            .appName("KafkaIEXStructuredStreaming") \
+            .master("local[*]") \
+            .config("spark.sql.warehouse.dir", "file:///C:/temp") \
+            .getOrCreate()
 
-parsedDF = streamingDF.stream_quotes()
+sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
+
+parsedDF = sss.stream_quotes(spark)
 
 selectDF = parsedDF \
         .select(explode(array("quote_data")))\
-        .select("col.companyName","col.primaryExchange","col.latestPrice","col.latestTime")\
-        .dropDuplicates(["companyName", "latestPrice", "latestTime"])
+        .select("col.*")\
+        .dropDuplicates(["symbol", "latestPrice", "latestTime"])
         
-writeDF_hdfs = streamingDF.write_hdfs(selectDF,"hdfs://0.0.0.0:19000/tmp6", "hdfs://0.0.0.0:19000/test6","companyName")        
-#writeDF_console = streamingDF.write_console(selectDF_quotes)
+#writeDF_hdfs = sss.write_hdfs(selectDF,hdfs_path, output_dir)        
+writeDF_console = sss.write_console(selectDF)
 
-writeDF_hdfs.awaitTermination()
-#writeDF_console.awaitTermination()
+spark.streams.awaitAnyTermination()
+
 
 
  

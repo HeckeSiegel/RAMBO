@@ -1,30 +1,59 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+import datetime
 import sys
 import sparkStructuredStreaming
 
 # bootstrap = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+bootstrap = sys.argv[1]
+hdfs_path = sys.argv[2]
+output_dir = sys.argv[3]
 
-streamingDF = sparkStructuredStreaming.kafka_spark_stream("127.0.0.1:9092")
-parsedDF_quotes = streamingDF.stream_quotes()
-parsedDF_news = streamingDF.stream_news()
+# udf to convert epoch time to spark TimestampType
+get_timestamp = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d %H:%M:%S"))
 
-parsedDF_quotes.printSchema()
-parsedDF_news.printSchema()
+spark = SparkSession \
+            .builder \
+            .appName("KafkaIEXStructuredStreaming") \
+            .master("local[*]") \
+            .config("spark.sql.warehouse.dir", "file:///C:/temp") \
+            .getOrCreate()
 
-selectDF_quotes = parsedDF_quotes \
+sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
+
+parsedDF = sss.stream_quotes(spark)       
+
+selectDF = parsedDF \
         .select(explode(array("quote_data")))\
-        .select("col.companyName","col.primaryExchange","col.latestPrice","col.latestTime")\
-        .dropDuplicates(["companyName", "latestPrice", "latestTime"])
+        .select(get_timestamp("col.latestUpdate").cast("timestamp").alias("timestamp"),"col.latestPrice")\
+        .withWatermark("timestamp", "24 hours")
 
+def time_chart(df,interval):
+    # use df with "timestamp", "latestPrice", "Watermark"
+    # get open, high, low prices for each intervall to make candlechart
+    interval_values = df.groupBy(
+        window(df.timestamp, interval))\
+        .agg(max("latestPrice").alias("high"),\
+            min("latestPrice").alias("low"),\
+            min("timestamp").alias("open_time"))\
+        .select("window.start","window.end","high","low","open_time")\
+        .withWatermark("start", interval)
+    
+    # join to get opening price from opening time
+    chart = interval_values.join(df,interval_values.open_time == df.timestamp, "left")\
+        .drop("open_time","timestamp")\
+        .withColumnRenamed("latestPrice","open")
         
-selectDF_news = parsedDF_news \
-        .select(explode(array("news_data")))\
-        .select("col.datetime","col.headline","col.related")\
-        .dropna().dropDuplicates(["headline"])
-                
+    return chart
 
-#writeDF_quotes = streamingDF.write_hdfs(selectDF_quotes,"hdfs://0.0.0.0:19000/tmp3", "hdfs://0.0.0.0:19000/test3/","companyName")        
-writeDF_news = streamingDF.write_console(selectDF_news)
-writeDF_news.awaitTermination()
+selectDF_tick = parsedDF \
+        .select(explode(array("quote_data")))\
+        .select("col.latestVolume","col.latestPrice")\
+        .withWatermark("timestamp", "24 hours")
+
+
+#writeDF_hdfs = sss.write_hdfs(selectDF,hdfs_path, output_dir)        
+writeDF_console = sss.write_console(chart)
+
+spark.streams.awaitAnyTermination()

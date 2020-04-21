@@ -22,8 +22,8 @@ class kafka_spark_stream:
 
         """
         self.bootstrap = bootstrap
-        
-    def stream_quotes(self):
+    
+    def stream_quotes(self, spark):
         """
         Streams data from topic iex_json_quotes.
 
@@ -36,12 +36,6 @@ class kafka_spark_stream:
         topic = "iex_json_quotes" 
         
         # config only necessary for windows
-        spark = SparkSession \
-            .builder \
-            .appName("KafkaIEXStructuredStreaming") \
-            .master("local[*]") \
-            .config("spark.sql.warehouse.dir", "file:///C:/temp") \
-            .getOrCreate()
         
         streamingDF = spark \
             .readStream \
@@ -92,18 +86,11 @@ class kafka_spark_stream:
                 
         return parsedDF
     
-    def stream_news(self):
+    def stream_news(self,spark):
         """
         Same as stream_quotes but for news data.
         """
         topic = "iex_json_news"
-        
-        spark = SparkSession \
-            .builder \
-            .appName("KafkaIEXStructuredStreamingNews") \
-            .master("local[*]") \
-            .config("spark.sql.warehouse.dir", "file:///C:/temp") \
-            .getOrCreate()
             
         streamingDF = spark \
             .readStream \
@@ -149,22 +136,23 @@ class kafka_spark_stream:
         writeDF = df \
             .writeStream \
             .queryName("write_console") \
-            .trigger(processingTime='1 seconds') \
             .outputMode("append") \
             .format("console") \
+            .trigger(processingTime = "1 seconds")\
+            .option('truncate', 'false')\
             .start()            
         return writeDF
 
-    def write_hdfs(self,df,checkpoint,path,partition):
+    def write_hdfs(self,df,hdfs_path,output_dir):
         """
         
 
         Parameters
         ----------
         df : Dataframe
-        checkpoint : path of checkpoints "hdfs://0.0.0.0:19000/<Directory>"
-        path : path where df will be saved "hdfs://0.0.0.0:19000/<Directory>"
-        partition : can be list of columns, have to be columns of df
+        hdfs_path : to get hadoop's default FS -> hdfs getconf -confkey fs.defaultFS 
+        on local machine it should be "hdfs://0.0.0.0:19000"
+        output_dir: ? iex/quotes/date ?
 
         Returns
         -------
@@ -176,10 +164,9 @@ class kafka_spark_stream:
             .queryName("write_hdfs") \
             .trigger(processingTime='1 seconds') \
             .outputMode("append") \
-            .format("json") \
-            .option("checkpointLocation",checkpoint) \
-            .option("path", path) \
-            .partitionBy(partition) \
+            .format("parquet") \
+            .option("checkpointLocation",hdfs_path +"/checkpoint") \
+            .option("path", hdfs_path +"/"+ output_dir) \
             .start()           
         return writeDF
             
