@@ -1,0 +1,10 @@
+v1
+{"taskId":0,"execTimeMillis":1587567898905,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587567913006,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587567930651,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587567947091,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587567964881,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587567984888,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587568001575,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587568017520,"resource":"1-minute-window/2020-04-22","records":1}
+{"taskId":0,"execTimeMillis":1587568034651,"resource":"1-minute-window/2020-04-22","records":1}

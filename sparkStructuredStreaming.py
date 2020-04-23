@@ -138,7 +138,7 @@ class kafka_spark_stream:
             .queryName("write_console") \
             .outputMode("append") \
             .format("console") \
-            .trigger(processingTime = "1 seconds")\
+            .trigger(processingTime = "60 seconds")\
             .option('truncate', 'false')\
             .start()            
         return writeDF
