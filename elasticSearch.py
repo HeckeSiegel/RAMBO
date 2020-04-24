@@ -4,7 +4,7 @@ from pyspark.sql.types import *
 import datetime
 import sys
 import sparkStructuredStreaming
-
+import numpy as np
 
 # run with '--packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 pyspark-shell'
 # --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar
@@ -20,23 +20,44 @@ spark = SparkSession \
 
 sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
 
-parsedDF = sss.stream_quotes(spark)       
+parsedDF_quotes = sss.stream_quotes(spark)       
+parsedDF_news = sss.stream_news(spark) 
 
 # udf to convert epoch time to spark TimestampType
 get_time = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%H:%M:%S"))
 get_date = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"))
-       
-selectDF_quotes = parsedDF \
+get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S")) 
+      
+selectDF_quotes = parsedDF_quotes \
         .select(explode(array("quote_data")))\
         .select("col.*",get_time("col.latestUpdate").cast("String").alias("time")\
                 ,get_date("col.latestUpdate").cast("String").alias("date"))
 
-path = "quotes/quotes"            
+selectDF_news = parsedDF_news \
+        .select(explode(array("news_data")))\
+        .select("col.*",get_datetime("col.datetime").cast("String").alias("date"))\
+        .dropna()\
+        .withColumnRenamed("related","symbol")
+        
+path_news = "news/news"            
+rand_news = str(np.random.randint(1,1000))
 
-selectDF_quotes.writeStream\
-    .option("checkpointLocation","checkpoint")\
+selectDF_news.writeStream\
+    .option("checkpointLocation","checkpoint/"+rand_news)\
+    .option("es.mapping.id", "datetime")\
     .outputMode("append")\
     .format("es")\
-    .start(path)\
-    .awaitTermination()
+    .start(path_news)
+    
+path_quotes = "quotes/quotes"            
+rand_quotes = str(np.random.randint(1,1000))
+
+selectDF_quotes.writeStream\
+    .option("checkpointLocation","checkpoint/"+rand_quotes)\
+    .option("es.mapping.id", "latestUpdate")\
+    .outputMode("append")\
+    .format("es")\
+    .start(path_quotes)
+
+spark.streams.awaitAnyTermination()
     
