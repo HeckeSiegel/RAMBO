@@ -6,7 +6,7 @@ import sys
 import sparkStructuredStreaming
 import numpy as np
 
-# run with '--packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 pyspark-shell'
+# run with spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 
 # --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar
 # bootstrap = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
 bootstrap = sys.argv[1]
@@ -30,8 +30,7 @@ get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftim
       
 selectDF_quotes = parsedDF_quotes \
         .select(explode(array("quote_data")))\
-        .select("col.*",get_time("col.latestUpdate").cast("String").alias("time")\
-                ,get_date("col.latestUpdate").cast("String").alias("date"))
+        .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
 
 selectDF_news = parsedDF_news \
         .select(explode(array("news_data")))\
@@ -40,7 +39,7 @@ selectDF_news = parsedDF_news \
         .withColumnRenamed("related","symbol")
         
 path_news = "news/news"            
-rand_news = str(np.random.randint(1,1000))
+rand_news = str(np.random.randint(1,1000000))
 
 selectDF_news.writeStream\
     .option("checkpointLocation","checkpoint/"+rand_news)\
@@ -50,7 +49,7 @@ selectDF_news.writeStream\
     .start(path_news)
     
 path_quotes = "quotes/quotes"            
-rand_quotes = str(np.random.randint(1,1000))
+rand_quotes = str(np.random.randint(1,1000000))
 
 selectDF_quotes.writeStream\
     .option("checkpointLocation","checkpoint/"+rand_quotes)\

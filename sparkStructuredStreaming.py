@@ -42,7 +42,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .load()
 
         schema = StructType() \
