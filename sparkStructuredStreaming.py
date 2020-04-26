@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+import numpy as np
 
 class kafka_spark_stream:
     
@@ -170,7 +171,16 @@ class kafka_spark_stream:
             .start()           
         return writeDF
             
-            
+    def write_es(self,df,es_id,es_index):
+        checkpoint = str(np.random.randint(1,10000000))        
+        writeDF = df \
+            .writeStream\
+            .option("checkpointLocation","checkpoint/" + checkpoint)\
+            .option("es.mapping.id", es_id)\
+            .outputMode("append")\
+            .format("es")\
+            .start(es_index+"/"+es_index)
+        return writeDF
             
             
             
