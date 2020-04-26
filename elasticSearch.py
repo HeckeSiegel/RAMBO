@@ -23,9 +23,11 @@ sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
 parsedDF_quotes = sss.stream_quotes(spark)       
 parsedDF_news = sss.stream_news(spark) 
 
-# udf to convert epoch time to spark TimestampType
+# udf to convert epoch time to human readable german time
 get_time = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%H:%M:%S"))
 get_date = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"))
+
+#use this for elasticsearch, otherwise it won't recognize date field
 get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S")) 
       
 selectDF_quotes = parsedDF_quotes \
@@ -37,8 +39,13 @@ selectDF_news = parsedDF_news \
         .select("col.*",get_datetime("col.datetime").cast("String").alias("date"))\
         .dropna()\
         .withColumnRenamed("related","symbol")
-        
-path_news = "news/news"            
+
+#index and type are the same word because elasticsearch will get rid of type in
+#future versions        
+path_news = "news/news"
+
+#random number for checkpoint location because it has to be different for each
+#stream (there's probably a smarter way to solve this)      
 rand_news = str(np.random.randint(1,1000000))
 
 selectDF_news.writeStream\
@@ -57,6 +64,6 @@ selectDF_quotes.writeStream\
     .outputMode("append")\
     .format("es")\
     .start(path_quotes)
-
+    
 spark.streams.awaitAnyTermination()
     
