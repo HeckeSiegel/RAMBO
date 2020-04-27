@@ -38,8 +38,8 @@ selectDF_es = parsedDF \
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
       
 #sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir) 
-#sss.write_console(selectDF)
-sss.write_es(selectDF_es,"latestUpdate","quotes")
+sss.write_console(selectDF_es)
+#sss.write_es(selectDF_es,"latestUpdate","quotes")
 
 spark.streams.awaitAnyTermination()
 

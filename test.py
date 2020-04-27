@@ -1,21 +1,66 @@
+import nltk
+import warnings
+import csv
+import pandas as pd
+warnings.filterwarnings('ignore')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+import sparkStructuredStreaming
 import datetime
 import sys
-import sparkStructuredStreaming
 
+#nltk.download('vader_lexicon')
+sia = SentimentIntensityAnalyzer()
 
-# run with '--packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 pyspark-shell'
-# --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar
-# bootstrap = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+# update lexicon
+# stock market lexicon
+'''stock_lex = pd.read_csv('lexicon_data/stock_lex.csv')
+stock_lex['sentiment'] = (stock_lex['Aff_Score'] + stock_lex['Neg_Score'])/2
+stock_lex = dict(zip(stock_lex.Item, stock_lex.sentiment))
+stock_lex = {k:v for k,v in stock_lex.items() if len(k.split(' '))==1}
+stock_lex_scaled = {}
+for k, v in stock_lex.items():
+    if v > 0:
+        stock_lex_scaled[k] = v / max(stock_lex.values()) * 4
+    else:
+        stock_lex_scaled[k] = v / min(stock_lex.values()) * -4
+
+# Loughran and McDonald
+positive = []
+with open('lexicon_data/lm_positive.csv', 'r') as f:
+    reader = csv.reader(f)
+    for row in reader:
+        positive.append(row[0].strip())
+    
+negative = []
+with open('lexicon_data/lm_negative.csv', 'r') as f:
+    reader = csv.reader(f)
+    for row in reader:
+        entry = row[0].strip().split(" ")
+        if len(entry) > 1:
+            negative.extend(entry)
+        else:
+            negative.append(entry[0])
+
+final_lex = {}
+final_lex.update({word:2.0 for word in positive})
+final_lex.update({word:-2.0 for word in negative})
+final_lex.update(stock_lex_scaled)
+final_lex.update(sia.lexicon)
+sia.lexicon = final_lex'''
+
+#Initialize spark stream
+#use this for elasticsearch, otherwise it won't recognize date field
+get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
+
+def sentiment_analysis(text):
+    return sia.polarity_scores(text)['compound']
+
+sentiment_analysis_udf = udf(sentiment_analysis, FloatType())
+
 bootstrap = sys.argv[1]
-#hdfs_path = sys.argv[2]
-#output_dir = sys.argv[3]
-
-# udf to convert epoch time to spark TimestampType
-get_timestamp = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d %H:%M:%S"))
-watermark = "20 hours"
 
 spark = SparkSession \
             .builder \
@@ -26,91 +71,17 @@ spark = SparkSession \
 
 sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
 
-parsedDF = sss.stream_quotes(spark)       
+parsedDF = sss.stream_news(spark)
 
 selectDF = parsedDF \
-        .select(explode(array("quote_data")))\
-        .select(get_timestamp("col.latestUpdate").cast("timestamp").alias("timestamp"),"col.latestPrice","col.symbol")\
-        .withWatermark("timestamp", watermark)
+        .select(explode(array("news_data")))\
+        .select("col.*",get_datetime("col.datetime").cast("String").alias("date")) \
+        .withColumnRenamed("related","symbol")
 
-selectDF2 = parsedDF \
-        .select(explode(array("quote_data")))\
-        .select(get_timestamp("col.latestUpdate").cast("timestamp").alias("timestamp"),"col.latestPrice","col.symbol")
+selectDF = selectDF.withColumn("sentiment_score_headline",sentiment_analysis_udf(selectDF['headline']))
+selectDF = selectDF.withColumn("sentiment_score_summary",sentiment_analysis_udf(selectDF['summary']))
 
-selectDF2 = selectDF2\
-            .select(window(selectDF2.timestamp, "1 minutes"), selectDF2.latestPrice)\
-            .select(col("window.start").alias("timestamp"),"latestPrice")
-            
-selectDF3 = parsedDF \
-        .select(explode(array("quote_data")))\
-        .select("col.*")\
-        .withColumnRenamed("latestUpdate","timestamp")
-        
-def time_chart(df,interval):
-    # use df with "timestamp", "latestPrice", "Watermark"
-    # get open, high, low prices for each time interval
-    interval_values = df.groupBy(
-        window(df.timestamp, interval))\
-        .agg(max("latestPrice").alias("high"),\
-            min("latestPrice").alias("low"),\
-            min("timestamp").alias("open_time"))\
-        .select("window.start","window.end","high","low","open_time")\
-        .withWatermark("start", watermark)
-    
-    # join to get opening price from opening time
-    chart = interval_values.join(df,interval_values.open_time == df.timestamp, "left")\
-        .drop("open_time","timestamp")\
-        .withColumnRenamed("latestPrice","open")
-        
-    return chart
+#writeDF_console = sss.write_console(selectDF)
+sss.write_es(selectDF,"datetime","news")
 
-def moving_average(spark, df, update, interval):
-    # simple moving average for the interval "interval"
-    
-    windowdf = df.select(window(df.timestamp, interval, update), df.latestPrice)
-    
-    windowdf.createOrReplaceTempView("windowdf_sql")
-    
-    sma = spark.sql("""SELECT windowdf_sql.window.start AS time, avg(windowdf_sql.latestPrice) AS average
-                    FROM windowdf_sql
-                    Group BY windowdf_sql.window
-                    """)   
-    return sma
-
-  
-#chart = time_chart(selectDF, "5 minutes")
-#average = moving_average(spark,selectDF, "1 minutes", "8 minutes")
-path = "quotes/2020-04-22"
-selectDF3.writeStream\
-    .option("checkpointLocation",path+"/checkpoint")\
-    .outputMode("append")\
-    .format("es")\
-    .start(path)\
-    .awaitTermination()
-    
-#sss.write_console(selectDF2).awaitTermination()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+spark.streams.awaitAnyTermination()

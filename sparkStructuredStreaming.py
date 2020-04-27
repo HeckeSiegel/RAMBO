@@ -43,7 +43,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "earliest") \
+            .option("startingOffsets", "latest") \
             .load()
 
         schema = StructType() \
@@ -98,7 +98,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "earliest") \
+            .option("startingOffsets", "latest") \
             .load()
         
         parsedDF = streamingDF.select(col("key").cast("String"), col("value").cast("string"))
@@ -139,7 +139,7 @@ class kafka_spark_stream:
             .queryName("write_console") \
             .outputMode("append") \
             .format("console") \
-            .trigger(processingTime = "60 seconds")\
+            .trigger(processingTime = "1 seconds")\
             .option('truncate', 'false')\
             .start()            
         return writeDF

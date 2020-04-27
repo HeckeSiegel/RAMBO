@@ -4,6 +4,8 @@ from pyspark.sql.types import *
 import sparkStructuredStreaming
 import datetime
 import sys
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 # run with 
 # spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_quotes.py "127.0.0.1:9092"...
@@ -36,10 +38,20 @@ selectDF_es = parsedDF \
         .select(explode(array("news_data")))\
         .select("col.*",get_datetime("col.datetime").cast("String").alias("date")) \
         .withColumnRenamed("related","symbol")
+
+# sentiment analysis of news
+sia = SentimentIntensityAnalyzer()
+
+def sentiment_analysis(text):
+    return sia.polarity_scores(text)['compound']
+
+sentiment_analysis_udf = udf(sentiment_analysis, FloatType())
+
+selectDF_es = selectDF_es.withColumn("sentiment_score",sentiment_analysis_udf(selectDF_es['summary']))
         
 #writeDF_hdfs = sss.write_hdfs(selectDF,hdfs_path, output_dir)        
-#writeDF_console = sss.write_console(selectDF)
-sss.write_es(selectDF_es,"datetime","news")
+writeDF_console = sss.write_console(selectDF_es)
+#sss.write_es(selectDF_es,"datetime","news")
 
 spark.streams.awaitAnyTermination()
         
