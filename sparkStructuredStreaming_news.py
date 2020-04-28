@@ -6,13 +6,14 @@ import datetime
 import sys
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import json
 
 # run with 
-# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_quotes.py "127.0.0.1:9092"...
+# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_news.py "127.0.0.1:9092"...
 # arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
 
 #use this for elasticsearch, otherwise it won't recognize date field
-get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
+get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
  
 bootstrap = sys.argv[1]
 hdfs_path = "hdfs://0.0.0.0:19000"
@@ -42,16 +43,24 @@ selectDF_es = parsedDF \
 # sentiment analysis of news
 sia = SentimentIntensityAnalyzer()
 
-def sentiment_analysis(text):
+#update lexicon
+with open('lexicon_data/final_lex.json', 'r') as fp:
+    final_lex = json.load(fp)
+    
+final_lex.update(sia.lexicon)
+sia.lexicon = final_lex
+
+def sentiment_analysis(txt1,txt2):
+    text = txt1 + ' ' + txt2
     return sia.polarity_scores(text)['compound']
 
 sentiment_analysis_udf = udf(sentiment_analysis, FloatType())
 
-selectDF_es = selectDF_es.withColumn("sentiment_score",sentiment_analysis_udf(selectDF_es['summary']))
+selectDF_es = selectDF_es.withColumn("sentiment_score",sentiment_analysis_udf(selectDF_es['headline'],selectDF_es['summary']))
         
 #writeDF_hdfs = sss.write_hdfs(selectDF,hdfs_path, output_dir)        
-writeDF_console = sss.write_console(selectDF_es)
-#sss.write_es(selectDF_es,"datetime","news")
+#writeDF_console = sss.write_console(selectDF_es)
+sss.write_es(selectDF_es,"datetime","news")
 
 spark.streams.awaitAnyTermination()
         

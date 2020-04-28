@@ -43,7 +43,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .load()
 
         schema = StructType() \
@@ -98,7 +98,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .load()
         
         parsedDF = streamingDF.select(col("key").cast("String"), col("value").cast("string"))
@@ -172,14 +172,16 @@ class kafka_spark_stream:
         return writeDF
             
     def write_es(self,df,es_id,es_index):
-        checkpoint = str(np.random.randint(1,10000000))        
+        checkpoint = str(np.random.randint(1,100000000))        
         writeDF = df \
             .writeStream\
-            .option("checkpointLocation","checkpoint/" + checkpoint)\
-            .option("es.mapping.id", es_id)\
             .outputMode("append")\
-            .format("es")\
-            .start(es_index+"/"+es_index)
+            .format("org.elasticsearch.spark.sql")\
+            .option("checkpointLocation","checkpoint/" + checkpoint)\
+            .option("es.resource", es_index+"/"+es_index) \
+            .option("es.mapping.id", es_id)\
+            .option("es.nodes", "127.0.0.1:9200") \
+            .start()
         return writeDF
             
             

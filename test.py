@@ -1,31 +1,32 @@
 import nltk
-import warnings
+#import warnings
 import csv
 import pandas as pd
-warnings.filterwarnings('ignore')
+#warnings.filterwarnings('ignore')
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
-from pyspark.sql import SparkSession
+import json
+'''from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 import sparkStructuredStreaming
 import datetime
-import sys
+import sys'''
 
 #nltk.download('vader_lexicon')
 sia = SentimentIntensityAnalyzer()
 
 # update lexicon
 # stock market lexicon
-'''stock_lex = pd.read_csv('lexicon_data/stock_lex.csv')
+stock_lex = pd.read_csv('lexicon_data/stock_lex.csv')
 stock_lex['sentiment'] = (stock_lex['Aff_Score'] + stock_lex['Neg_Score'])/2
 stock_lex = dict(zip(stock_lex.Item, stock_lex.sentiment))
 stock_lex = {k:v for k,v in stock_lex.items() if len(k.split(' '))==1}
 stock_lex_scaled = {}
 for k, v in stock_lex.items():
     if v > 0:
-        stock_lex_scaled[k] = v / max(stock_lex.values()) * 4
+        stock_lex_scaled[k] = v / max(stock_lex.values()) * 2
     else:
-        stock_lex_scaled[k] = v / min(stock_lex.values()) * -4
+        stock_lex_scaled[k] = v / min(stock_lex.values()) * -2
 
 # Loughran and McDonald
 positive = []
@@ -45,15 +46,17 @@ with open('lexicon_data/lm_negative.csv', 'r') as f:
             negative.append(entry[0])
 
 final_lex = {}
-final_lex.update({word:2.0 for word in positive})
-final_lex.update({word:-2.0 for word in negative})
+final_lex.update({word:1.0 for word in positive})
+final_lex.update({word:-1.0 for word in negative})
 final_lex.update(stock_lex_scaled)
-final_lex.update(sia.lexicon)
-sia.lexicon = final_lex'''
+with open('lexicon_data/final_lex.json', 'w') as fp:
+    json.dump(final_lex, fp)
+#final_lex.update(sia.lexicon)
+#sia.lexicon = final_lex
 
 #Initialize spark stream
 #use this for elasticsearch, otherwise it won't recognize date field
-get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
+'''get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
 
 def sentiment_analysis(text):
     return sia.polarity_scores(text)['compound']
@@ -84,4 +87,4 @@ selectDF = selectDF.withColumn("sentiment_score_summary",sentiment_analysis_udf(
 #writeDF_console = sss.write_console(selectDF)
 sss.write_es(selectDF,"datetime","news")
 
-spark.streams.awaitAnyTermination()
+spark.streams.awaitAnyTermination()'''

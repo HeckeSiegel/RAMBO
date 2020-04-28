@@ -11,7 +11,7 @@ import datetime
 # arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
 
 #use this for elasticsearch, otherwise it won't recognize date field
-get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
+get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
  
 bootstrap = sys.argv[1]
 hdfs_path = "hdfs://0.0.0.0:19000"
@@ -38,8 +38,8 @@ selectDF_es = parsedDF \
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
       
 #sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir) 
-sss.write_console(selectDF_es)
-#sss.write_es(selectDF_es,"latestUpdate","quotes")
+#sss.write_console(selectDF_es)
+sss.write_es(selectDF_es,"latestUpdate","quotes")
 
 spark.streams.awaitAnyTermination()
 
