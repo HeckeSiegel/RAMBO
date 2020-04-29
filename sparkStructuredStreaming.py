@@ -132,7 +132,46 @@ class kafka_spark_stream:
                 
         return parsedDF
 
+    def stream_company(self,spark):
         
+        topic = "iex_json_company" 
+        
+        # config only necessary for windows
+        
+        streamingDF = spark \
+                    .readStream \
+                    .format("kafka") \
+                    .option("kafka.bootstrap.servers", self.bootstrap) \
+                    .option("subscribe", topic) \
+                    .option("startingOffsets", "latest") \
+                    .load()
+
+        schema = StructType() \
+                        .add("symbol", StringType())\
+                        .add("companyName",StringType())\
+                        .add("exchange", StringType())\
+                        .add("industry", StringType())\
+                        .add("website", StringType())\
+                        .add("description", StringType())\
+                        .add("CEO",StringType())\
+                        .add("securityName", StringType())\
+                        .add("issueType", StringType())\
+                        .add("sector", StringType())\
+                        .add("employees",LongType())\
+                        .add("tags", StringType())\
+                        .add("address", StringType())\
+                        .add("state", StringType())\
+                        .add("city", StringType())\
+                        .add("zip", StringType())\
+                        .add("country", StringType())\
+                        .add("phone", StringType())\
+                        .add("primarySisCode", StringType())
+        
+        parsedDF = streamingDF\
+            .select(col("key").cast("String"), from_json(col("value").cast("string"), schema).alias("company_data"))
+            
+        return parsedDF
+    
     def write_console(self,df):
         writeDF = df \
             .writeStream \
@@ -144,7 +183,7 @@ class kafka_spark_stream:
             .start()            
         return writeDF
 
-    def write_hdfs(self,df,hdfs_path,output_dir):
+    def write_hdfs(self,df,hdfs_path,output_dir,partition):
         """
         
 
@@ -166,9 +205,10 @@ class kafka_spark_stream:
             .trigger(processingTime='1 seconds') \
             .outputMode("append") \
             .format("parquet") \
-            .option("checkpointLocation",hdfs_path +"/checkpoint") \
+            .option("checkpointLocation",hdfs_path +"/checkpoint"+"/"+output_dir) \
             .option("path", hdfs_path +"/"+ output_dir) \
-            .start()           
+            .partitionBy(partition) \
+            .start()
         return writeDF
             
     def write_es(self,df,es_id,es_index):
@@ -183,26 +223,4 @@ class kafka_spark_stream:
             .option("es.nodes", "127.0.0.1:9200") \
             .start()
         return writeDF
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+          

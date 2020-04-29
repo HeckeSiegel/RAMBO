@@ -12,10 +12,13 @@ import datetime
 
 #use this for elasticsearch, otherwise it won't recognize date field
 get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
- 
+
+#for hdfs to partition the data by date 
+get_date = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"))
+
 bootstrap = sys.argv[1]
 hdfs_path = "hdfs://0.0.0.0:19000"
-output_dir = "iex/quotes/<date>"
+output_dir = "iex/quotes"
 
 spark = SparkSession \
             .builder \
@@ -28,16 +31,16 @@ sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
 
 parsedDF = sss.stream_quotes(spark)
 
-'''selectDF_hdfs = parsedDF \
+selectDF_hdfs = parsedDF \
         .select(explode(array("quote_data")))\
-        .select("col.*")\
-        .dropDuplicates(["symbol", "latestPrice", "latestTime"])'''
+        .select("col.*", get_date("col.latestUpdate").cast("Timestamp").alias("date"))\
+        .dropDuplicates(["symbol", "latestPrice", "latestTime"])
 
 selectDF_es = parsedDF \
         .select(explode(array("quote_data")))\
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
       
-#sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir) 
+#sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir,"date") 
 #sss.write_console(selectDF_es)
 sss.write_es(selectDF_es,"latestUpdate","quotes")
 
