@@ -33,14 +33,15 @@ sss = sparkStructuredStreaming.kafka_spark_stream(bootstrap)
 
 parsedDF = sss.stream_news(spark)
 
-selectDF_hdfs = parsedDF \
+# drop na before transforming time, otherwise will get error
+selectDF = parsedDF \
         .select(explode(array("news_data")))\
-        .select("col.*", get_date("col.datetime").cast("Timestamp").alias("date"))\
+        .select("col.*")\
         .dropna().dropDuplicates(["headline"])
 
-selectDF_es = parsedDF \
-        .select(explode(array("news_data")))\
-        .select("col.*",get_datetime("col.datetime").cast("String").alias("date")) \
+selectDF_hdfs = selectDF.withColumn("date",get_date("datetime").cast("Timestamp"))
+
+selectDF_es = selectDF.withColumn("date",get_datetime("col.datetime").cast("String")) \
         .withColumnRenamed("related","symbol")
 
 # sentiment analysis of news
@@ -61,8 +62,8 @@ sentiment_analysis_udf = udf(sentiment_analysis, FloatType())
 
 selectDF_es = selectDF_es.withColumn("sentiment_score",sentiment_analysis_udf(selectDF_es['headline'],selectDF_es['summary']))
         
-#writeDF_hdfs = sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir, "date")        
+writeDF_hdfs = sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir, "date")        
 #writeDF_console = sss.write_console(selectDF_es)
-sss.write_es(selectDF_es,"datetime","news")
+#sss.write_es(selectDF_es,"datetime","news")
 
 spark.streams.awaitAnyTermination()
