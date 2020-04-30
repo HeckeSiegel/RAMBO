@@ -11,8 +11,6 @@ class kafka_spark_stream:
     
     def __init__(self, bootstrap):
         """
-        
-
         Parameters
         ----------
         bootstrap : "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
@@ -35,8 +33,6 @@ class kafka_spark_stream:
 
         """
         topic = "iex_json_quotes" 
-        
-        # config only necessary for windows
         
         streamingDF = spark \
             .readStream \
@@ -132,11 +128,8 @@ class kafka_spark_stream:
                 
         return parsedDF
 
-    def stream_company(self,spark):
-        
+    def stream_company(self,spark):        
         topic = "iex_json_company" 
-        
-        # config only necessary for windows
         
         streamingDF = spark \
                     .readStream \
@@ -185,8 +178,6 @@ class kafka_spark_stream:
 
     def write_hdfs(self,df,hdfs_path,output_dir,partition):
         """
-        
-
         Parameters
         ----------
         df : Dataframe
@@ -212,6 +203,22 @@ class kafka_spark_stream:
         return writeDF
             
     def write_es(self,df,es_id,es_index):
+        """
+        Note: elasticsearch only supports append mode
+        
+        Parameters
+        ----------
+        df : Dataframe that will be written to elastic search
+        es_id : If you use the timestamp as id, es won't write the same stock twice
+        es_index : In future versions es will get rid of type, so we use the index
+        also as type.
+        Returns
+        -------
+        writeDF : Writes all rows from df as individual entries with es_id into es_index.
+
+        """
+        # random checkpoint because it didn't work when using the same checkpoint
+        # path for 2 different streams
         checkpoint = str(np.random.randint(1,100000000))        
         writeDF = df \
             .writeStream\

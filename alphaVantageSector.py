@@ -4,6 +4,8 @@ from pytz import timezone
 from elasticsearch import Elasticsearch
 import time
 
+# reads sector performance from alpha vantage and writes it into elasticsearch
+# every 10 seconds
 
 es=Elasticsearch([{'host':'localhost','port':9200}])
 

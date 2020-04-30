@@ -8,11 +8,13 @@ import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import json
 
-# run with 
-# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar elasticSearch.py "127.0.0.1:9092"...
-# arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+""" 
+This script streams from all 3 topics into elastic search at once. Run it from the command line with
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar elasticSearch.py arg
+arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+"""
 
-#use this for elasticsearch, otherwise it won't recognize date field
+#transform timestamp, otherwise elasticsearch won't recognize date field
 get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
 
 # initialize spark session 
