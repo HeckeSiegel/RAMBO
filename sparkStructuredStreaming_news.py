@@ -1,7 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-import sparkStructuredStreaming
+from lib import sparkStructuredStreaming
 import datetime
 import sys
 import nltk
@@ -12,6 +12,7 @@ import json
 This script streams only from news topic. Run it from the command line with
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_news.py arg
 arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+Replace "C:" with the path to your elasticsearch-hadoop directory
 """
 
 #use this for elasticsearch, otherwise it won't recognize date field

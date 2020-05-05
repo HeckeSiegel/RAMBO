@@ -1,7 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-import sparkStructuredStreaming
+from lib import sparkStructuredStreaming
 import sys
 import numpy as np
 import datetime
@@ -10,6 +10,7 @@ import datetime
 This script streams only from quotes topic. Run it from the command line with
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_quotes.py arg
 arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
+Replace "C:" with the path to your elasticsearch-hadoop directory
 """
 
 #use this for elasticsearch, otherwise it won't recognize date field
@@ -48,8 +49,8 @@ selectDF_es = parsedDF \
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
 
 # write streams either into hdfs, console, es or all at once        
-sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir,"date") 
-#sss.write_console(selectDF_es)
+#sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir,"date") 
+sss.write_console(selectDF_es)
 #sss.write_es(selectDF_es,"latestUpdate","quotes")
 
 spark.streams.awaitAnyTermination()
