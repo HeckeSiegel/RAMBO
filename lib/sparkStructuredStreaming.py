@@ -1,7 +1,13 @@
 from pyspark.sql import SparkSession
+from pyspark.sql import SQLContext
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 import numpy as np
+import yfinance as yf
+import datetime
+from pytz import timezone
+from pyspark.sql.window import Window
+from elasticsearch import Elasticsearch
 
 class kafka_spark_stream:
     
@@ -231,3 +237,176 @@ class kafka_spark_stream:
             .start()
         return writeDF
           
+class history:
+        
+    def to_es(self,symbol,interval,period,sqlContext):
+        """
+        Writes historical stock data from yahoo finance into elasticsearch
+
+        Parameters
+        ----------
+        symbol : Stock ticker symbol from US market
+        interval : 1m,2m,5m,15m,30m,60m,90m,1d,5d,1wk,1mo,3mo
+        period : 1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max
+        sqlContext : sqlContext from SparkSession.
+
+        Returns
+        -------
+        None.
+
+        """
+        #udf that transforms timestamp into the right format for es
+        get_datetime_yahoo = udf(lambda x : ((timezone('Europe/Berlin').localize(x)).astimezone(timezone('UTC'))).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
+        
+        #read historical data from yahoo finance into a pandas df
+        ticker = yf.Ticker(symbol)
+        pandas_history = ticker.history(period=period, interval=interval)
+        
+        #tranform into spark df
+        pandas_history.reset_index(drop=False, inplace=True)
+        spark_history = sqlContext.createDataFrame(pandas_history)
+        
+        #name of timestamp column depends on interval
+        if(interval in ["1d","5d","1wk","1mo","3mo","1h"]):
+            timestamp = "Date"
+        else:
+            timestamp = "Datetime"
+            
+        #transform time, add symbol, add unique id    
+        spark_history = spark_history.select("Open","High","Low","Close","Volume",get_datetime_yahoo(timestamp).cast("String").alias("date"))
+        spark_history = spark_history.withColumn("symbol", lit(symbol))
+        spark_history = spark_history.withColumn('id',concat(col("date"),col("symbol")))
+        
+        #write into elasticsearch
+        spark_history.write\
+                    .format("es")\
+                    .mode("append")\
+                    .option("es.resource", interval+"/history")\
+                    .option("es.mapping.id", "id")\
+                    .option("es.nodes", "127.0.0.1:9200") \
+                    .save()
+                    
+    def from_es(self,symbol,interval,spark):
+        """
+        Reads historical data from elasticsearch
+
+        Parameters
+        ----------
+        symbol : Stock ticker symbol from US market
+        interval : 1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
+        spark : Spark Session
+        
+        Returns
+        -------
+        Dataframe containing all historical data for given symbol with specified 
+        interval ordered by time
+        
+        """
+        df = spark.read.format("es").load(interval+"/history")
+        return df.drop("id").filter(df.symbol == symbol).orderBy("date")
+    
+class backtest:
+    
+    def SimulateTrading(self, moneyOwned, stocksOwned, stockPrice, position, commission, trades):
+        """
+        Simple trading simulator
+
+        Parameters
+        ----------
+        moneyOwned : Money which is not invested yet
+        stocksOwned : Number of stocks owned
+        stockPrice : Price to buy a certain stock
+        position : either 1=sell, 0=hold, buy=-1
+        commission : Percentage of broker commission
+        trades : Number of trades
+
+        Returns
+        -------
+        moneyOwned : Money which is not invested after trade
+        stocksOwned : Number of stocks after trade
+        total : total worth of deposit
+        trades : Number of trades after trade
+
+        """
+        if (position < 0) and (moneyOwned>stockPrice*(1+commission)) :
+        # buy one stock
+            moneyOwned -= stockPrice*(1+commission)
+            stocksOwned += 1
+            trades += 1
+        elif (position > 0) and (stocksOwned>0) :
+        # sell one stock
+            moneyOwned += stockPrice*(1-commission)
+            stocksOwned -= 1
+            trades += 1
+            
+        total = moneyOwned + stocksOwned*stockPrice*(1-commission)
+        
+        return (moneyOwned, stocksOwned, total, trades)
+
+    def momentum(self, symbol, interval, momentum, spark, moneyOwned, commission):
+        """
+        Calculates position for momentum strategy, backtests it and writes results to elasticsearch
+
+        Parameters
+        ----------
+        symbol : company that's being traded
+        interval : interval of stock prices to backtest
+        momentum : same unit as interval
+        spark : Spark Session
+        moneyOwned : start capital
+        commission : percentage of commission broker takes
+
+        Returns
+        -------
+        None.
+
+        """
+        data_momentum = history().from_es(symbol,interval,spark)
+        
+        momentum_shift = data_momentum.select("Close","date")\
+            .withColumn("Close_shift", lag(data_momentum.Close)\
+            .over(Window.partitionBy().orderBy("date")))
+                
+        momentum_returns = momentum_shift\
+            .withColumn("returns",log(momentum_shift.Close/momentum_shift.Close_shift))
+            
+        momentum_position = momentum_returns.\
+            withColumn("position",signum(avg("returns")\
+            .over(Window.partitionBy().rowsBetween(-momentum,0))))
+                
+        momentum_position = momentum_position.select("date","Close","position").na.drop()
+        
+        stocksOwned = 0
+        total = moneyOwned
+        trades = 0
+
+        es=Elasticsearch([{'host':'localhost','port':9200}])
+        
+        for row in momentum_position.collect():
+            doc = {}
+            result = self.SimulateTrading(moneyOwned, stocksOwned, row.Close, row.position, commission, trades)
+            moneyOwned = result[0]
+            stocksOwned = result[1]
+            total = result[2]
+            trades = result[3]
+            doc['date'] = row.date
+            doc['symbol'] = symbol
+            doc['moneyOwned'] = moneyOwned
+            doc['stocksOwned'] = stocksOwned
+            doc['total'] = total
+            doc['price'] = row.Close
+            doc['moneyInvested'] = stocksOwned*row.Close
+            doc['momentum'] = momentum
+            doc['trades'] = trades
+            es.index(index="momentum"+interval, body=doc)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
