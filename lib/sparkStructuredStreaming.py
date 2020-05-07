@@ -328,6 +328,7 @@ class backtest:
         trades : Number of trades after trade
 
         """
+        
         if (position < 0) and (moneyOwned>stockPrice*(1+commission)) :
         # buy one stock
             moneyOwned -= stockPrice*(1+commission)
@@ -339,9 +340,41 @@ class backtest:
             stocksOwned -= 1
             trades += 1
             
-        total = moneyOwned + stocksOwned*stockPrice*(1-commission)
         
-        return (moneyOwned, stocksOwned, total, trades)
+        return (moneyOwned, stocksOwned, trades)
+    
+    def momentum_position(self, symbol, interval, momentum, spark):
+        """
+        Calculates positions for momentum strategy
+
+        Parameters
+        ----------
+        symbol : stock ticker
+        interval : interval of trading
+        momentum : same unit as interval
+        spark : spark session
+
+        Returns
+        -------
+        Dataframe with date, closing price and position
+
+        """
+        data_momentum = history().from_es(symbol,interval,spark)
+            
+        momentum_shift = data_momentum.select("Close","date")\
+                .withColumn("Close_shift", lag(data_momentum.Close)\
+                .over(Window.partitionBy().orderBy("date")))
+                    
+        momentum_returns = momentum_shift\
+                .withColumn("returns",log(momentum_shift.Close/momentum_shift.Close_shift))
+                
+        momentum_df = momentum_returns.\
+                withColumn("position",signum(avg("returns")\
+                .over(Window.partitionBy().rowsBetween(-momentum,0))))
+        close_new = 'close'+symbol
+        position_new = 'position'+symbol
+        
+        return momentum_df.select("date",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
 
     def momentum(self, symbol, interval, momentum, spark, moneyOwned, commission):
         """
@@ -349,7 +382,7 @@ class backtest:
 
         Parameters
         ----------
-        symbol : company that's being traded
+        symbol : company that's being traded, can be list
         interval : interval of stock prices to backtest
         momentum : same unit as interval
         spark : Spark Session
@@ -361,43 +394,48 @@ class backtest:
         None.
 
         """
-        data_momentum = history().from_es(symbol,interval,spark)
         
-        momentum_shift = data_momentum.select("Close","date")\
-            .withColumn("Close_shift", lag(data_momentum.Close)\
-            .over(Window.partitionBy().orderBy("date")))
-                
-        momentum_returns = momentum_shift\
-            .withColumn("returns",log(momentum_shift.Close/momentum_shift.Close_shift))
-            
-        momentum_position = momentum_returns.\
-            withColumn("position",signum(avg("returns")\
-            .over(Window.partitionBy().rowsBetween(-momentum,0))))
-                
-        momentum_position = momentum_position.select("date","Close","position").na.drop()
+        df = self.momentum_position(symbol[0], interval, momentum, spark)
+        symbol_name = symbol[0]
+        stocksOwned = [0]
         
-        stocksOwned = 0
-        total = moneyOwned
+        # when given list of several stocks
+        if len(symbol)>1:
+            for i in range(1,len(symbol)):
+                symbol_name = symbol_name + symbol[i]
+                stocksOwned.append(0)
+                df0 = self.momentum_position(symbol[i], interval, momentum, spark)
+                df = df.join(df0,"date",how='left')
+        
         trades = 0
-
+        total = moneyOwned
         es=Elasticsearch([{'host':'localhost','port':9200}])
         
-        for row in momentum_position.collect():
+        for row in df.collect():
             doc = {}
-            result = self.SimulateTrading(moneyOwned, stocksOwned, row.Close, row.position, commission, trades)
-            moneyOwned = result[0]
-            stocksOwned = result[1]
-            total = result[2]
-            trades = result[3]
+            total_init = total
+            moneyInStocks = 0
+            for i in range(len(symbol)):
+                close = 'close'+symbol[i]
+                position = 'position'+symbol[i]
+                stocks = 'stocksOwned'+symbol[i]
+                
+                result = self.SimulateTrading(moneyOwned, stocksOwned[i], row[close], row[position], commission, trades)
+                moneyOwned = result[0]
+                stocksOwned[i] = result[1]
+                moneyInStocks += stocksOwned[i]*row[close]*(1-commission)
+                trades = result[2]
+                doc[close] = row[close]
+                doc[stocks] = stocksOwned[i]
+            
+            total = moneyOwned + moneyInStocks
             doc['date'] = row.date
-            doc['symbol'] = symbol
+            doc['symbol'] = symbol_name
             doc['moneyOwned'] = moneyOwned
-            doc['stocksOwned'] = stocksOwned
             doc['total'] = total
-            doc['price'] = row.Close
-            doc['moneyInvested'] = stocksOwned*row.Close
             doc['momentum'] = momentum
             doc['trades'] = trades
+            doc['returns'] = total/total_init
             es.index(index="momentum"+interval, body=doc)
     
     
