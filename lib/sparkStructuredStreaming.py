@@ -8,6 +8,8 @@ import datetime
 from pytz import timezone
 from pyspark.sql.window import Window
 from elasticsearch import Elasticsearch
+from yahoofinancials import YahooFinancials
+import math as m
 
 class kafka_spark_stream:
     
@@ -285,6 +287,29 @@ class history:
                     .option("es.mapping.id", "id")\
                     .option("es.nodes", "127.0.0.1:9200") \
                     .save()
+    
+    def to_hdfs(self, symbol, interval, period, sqlContext, hdfs_path):
+        """
+        Writes historical stock data from yahoo finance into hdfs
+
+        Parameters
+        ----------
+        symbol : stock ticker
+        interval : 1m,2m,5m,15m,30m,60m,90m,1d,5d,1wk,1mo,3mo
+        period : 1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max
+        sqlContext : sqlContext from SparkSession.
+
+        Returns
+        -------
+        None.
+
+        """
+        ticker = yf.Ticker(symbol)
+        pandas_history = ticker.history(period=period, interval=interval)
+        pandas_history.reset_index(drop=False, inplace=True)
+        spark_history = sqlContext.createDataFrame(pandas_history)
+        spark_history.select("Datetime","Open","High","Close","Volume")\
+                    .write.save(hdfs_path+"/historical/"+interval+"/"+symbol, format='parquet', mode='overwrite')
                     
     def from_es(self,symbol,interval,spark):
         """
@@ -304,6 +329,24 @@ class history:
         """
         df = spark.read.format("es").load(interval+"/history")
         return df.drop("id").filter(df.symbol == symbol).orderBy("date")
+    
+    def from_hdfs(self, symbol, interval, sqlContext, hdfs_path):
+        """
+        Reads historical dara from hdfs
+
+        Parameters
+        ----------
+        symbol : stock ticker
+        interval : 1m,2m,5m,15m,30m,60m,90m,1d,5d,1wk,1mo,3mo
+        sqlContext : sql context from spark session
+        hdfs_path : local -> hdfs://0.0.0.0:19000
+
+        Returns
+        -------
+        Dataframe with historical OHCL,Volume data
+
+        """
+        return sqlContext.read.format('parquet').load(hdfs_path+"/historical/"+interval+"/"+symbol) 
     
 class backtest:
     
@@ -330,20 +373,20 @@ class backtest:
         """
         
         if (position < 0) and (moneyOwned>stockPrice*(1+commission)) :
-        # buy one stock
-            moneyOwned -= stockPrice*(1+commission)
-            stocksOwned += 1
-            trades += 1
+        # buy as many stocks as possible stock
+            stocksBuy = int(moneyOwned / stockPrice)
+            moneyOwned -= stockPrice*stocksBuy*(1+commission)
+            trades += stocksBuy
+            stocksOwned += stocksBuy
         elif (position > 0) and (stocksOwned>0) :
-        # sell one stock
-            moneyOwned += stockPrice*(1-commission)
-            stocksOwned -= 1
-            trades += 1
-            
-        
+        # sell all stocks
+            trades += stocksOwned
+            stocksSell = stocksOwned
+            moneyOwned += stocksSell*stockPrice*(1-commission)
+            stocksOwned = 0
         return (moneyOwned, stocksOwned, trades)
     
-    def momentum_position(self, symbol, interval, momentum, spark):
+    def momentum_position(self, symbol, interval, momentum, sqlContext, hdfs_path):
         """
         Calculates positions for momentum strategy
 
@@ -359,11 +402,11 @@ class backtest:
         Dataframe with date, closing price and position
 
         """
-        data_momentum = history().from_es(symbol,interval,spark)
+        data_momentum = history().from_hdfs(symbol, interval, sqlContext, hdfs_path)
             
-        momentum_shift = data_momentum.select("Close","date")\
+        momentum_shift = data_momentum.select("Close","Datetime")\
                 .withColumn("Close_shift", lag(data_momentum.Close)\
-                .over(Window.partitionBy().orderBy("date")))
+                .over(Window.partitionBy().orderBy("Datetime")))
                     
         momentum_returns = momentum_shift\
                 .withColumn("returns",log(momentum_shift.Close/momentum_shift.Close_shift))
@@ -371,80 +414,142 @@ class backtest:
         momentum_df = momentum_returns.\
                 withColumn("position",signum(avg("returns")\
                 .over(Window.partitionBy().rowsBetween(-momentum,0))))
-        close_new = 'close'+symbol
-        position_new = 'position'+symbol
+        close_new = 'Close'+symbol
+        position_new = 'Position'+symbol
         
-        return momentum_df.select("date",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
-
-    def momentum(self, symbol, interval, momentum, spark, moneyOwned, commission):
+        return momentum_df.select("Datetime",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
+    
+    def momentum_portfolio_position(self, symbol, interval, momentum, sqlContext, hdfs_path):
         """
-        Calculates position for momentum strategy, backtests it and writes results to elasticsearch
+        Getting the positions for the momentum strategy of a whole portfolio
 
         Parameters
         ----------
+        symbol : stock ticker
+        interval : granularity of stock prices
+        momentum : parameter of momentum strategy
+        sqlContext : from spark session
+        hdfs_path : local -> "hdfs://0.0.0.0:19000"
+
+        Returns
+        -------
+        df : dataframe with all closing prices and positions
+
+        """
+        # dataframe for positions of momentum strategy
+        df = self.momentum_position(symbol[0], interval, momentum, sqlContext, hdfs_path)
+        # join with nasdaq data to calculate alpha
+        nasdaq = self.momentum_position("^IXIC", interval, momentum, sqlContext, hdfs_path)
+        df = df.join(nasdaq,"Datetime",how='left')
+        
+        for i in range(1,len(symbol)):
+            df0 = self.momentum_position(symbol[i], interval, momentum, sqlContext, hdfs_path)
+            df = df.join(df0,"Datetime",how='left')
+            df = df.na.drop()
+        return df
+       
+    def depot(self, depotId, symbol, share, position, startCap, commission, risk_free):
+        """
+        Calculates performance for given positions
+
+        Parameters
+        ----------
+        position: dataframe which contains dates, closing prices and positions for all symbols + nasdaq
+        depotId: Id to identify different depots
         symbol : company that's being traded, can be list
-        interval : interval of stock prices to backtest
+        share: distribution of startCap, has to be normalized and len(share)=len(symbol)+1
         momentum : same unit as interval
-        spark : Spark Session
-        moneyOwned : start capital
+        startCap: start capital
         commission : percentage of commission broker takes
 
         Returns
         -------
-        None.
+        value : Wert in $
+        startCap : Start-Capital in $
+        profit : Profit in $
+        start_date : Beginning of backtest
+        trades_total : total trades
+        Performance : performance in %
+        beta_avg : beta of strategy
+        alpha : alpha of strategy
 
         """
-        
-        df = self.momentum_position(symbol[0], interval, momentum, spark)
-        symbol_name = symbol[0]
+
+        # number of stocks owned for each company
         stocksOwned = [0]
+        # total number of trades
+        trades_total = 0
+        # current value of your depot
+        value = startCap
+        # to get the start date of historical data
+        start_date_count = 0
+        # distribution of cash which can be invested
+        moneyForInvesting =[startCap*share[0]]
+        # cash which shall not be invested
+        cash = startCap*share[-1]
+        # dictionary with betas for all symbols
+        beta_stocks = YahooFinancials(symbol).get_beta()
+        beta_list = []
+        # money in stocks for indiviudal companys
+        moneyInStocks_list = [0]
         
         # when given list of several stocks
         if len(symbol)>1:
             for i in range(1,len(symbol)):
-                symbol_name = symbol_name + symbol[i]
                 stocksOwned.append(0)
-                df0 = self.momentum_position(symbol[i], interval, momentum, spark)
-                df = df.join(df0,"date",how='left')
+                moneyInStocks_list.append(0)
+                moneyForInvesting.append(startCap*share[i])
         
-        trades = 0
-        total = moneyOwned
-        es=Elasticsearch([{'host':'localhost','port':9200}])
+        df = position
         
         for row in df.collect():
-            doc = {}
-            total_init = total
-            moneyInStocks = 0
-            for i in range(len(symbol)):
-                close = 'close'+symbol[i]
-                position = 'position'+symbol[i]
-                stocks = 'stocksOwned'+symbol[i]
-                
-                result = self.SimulateTrading(moneyOwned, stocksOwned[i], row[close], row[position], commission, trades)
-                moneyOwned = result[0]
-                stocksOwned[i] = result[1]
-                moneyInStocks += stocksOwned[i]*row[close]*(1-commission)
-                trades = result[2]
-                doc[close] = row[close]
-                doc[stocks] = stocksOwned[i]
             
-            total = moneyOwned + moneyInStocks
-            doc['date'] = row.date
-            doc['symbol'] = symbol_name
-            doc['moneyOwned'] = moneyOwned
-            doc['total'] = total
-            doc['momentum'] = momentum
-            doc['trades'] = trades
-            doc['returns'] = total/total_init
-            es.index(index="momentum"+interval, body=doc)
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+            # get start date of historical data and beginning price of nasdaq index
+            if start_date_count == 0:
+                start_date = row.Datetime
+                start_date_count += 1
+                nasdaq_init = row["Close^IXIC"]
+                
+            # current value before trading
+            value_init = value
+            
+            # set to 0 before every trading cycle to calculate new
+            moneyInStocks = 0
+            
+            # cash + whichever money will not be invested
+            moneyFree = cash
+            
+            # calculate beta for each cash distribution new
+            beta_current = 0
+            
+            # go through all companies
+            for i in range(len(symbol)):
+                close = "Close"+symbol[i]
+                position = "Position"+symbol[i]
+                
+                result = self.SimulateTrading(moneyForInvesting[i], stocksOwned[i], row[close], row[position], commission, trades_total)
+                moneyForInvesting[i] = result[0]
+                stocksOwned[i] = result[1]
+                trades_total = result[2]
+                # money currently invested in stocks
+                moneyInStocks_list[i] = stocksOwned[i]*row[close]*(1-commission)
+                moneyInStocks += stocksOwned[i]*row[close]*(1-commission)
+                # free money that can be used to buy stocks
+                moneyFree += moneyForInvesting[i]
+                beta_current += beta_stocks[symbol[i]]*moneyInStocks_list[i]/value
+                
+            # total current value of depot (free money + invested money)
+            value = moneyInStocks + moneyFree
+            # distribution of free money has to be distributed new after every trade
+            cash = share[-1]*moneyFree
+            moneyForInvesting = [share[i]*moneyFree for i in range(len(symbol))]
+            beta_list.append(beta_current)
+            nasdaq_current = row["Close^IXIC"]
+            
+        profit = value - startCap
+        performance_depot = (value/startCap - 1)*100
+        performance_nasdaq = (nasdaq_current/nasdaq_init - 1)*100
+        beta_avg = m.fsum(beta_list)/len(beta_list)
+        alpha = performance_depot - risk_free - beta_avg*(performance_nasdaq - risk_free)
+        return (value, startCap, profit, start_date, trades_total, performance_depot,beta_avg,alpha)
+
