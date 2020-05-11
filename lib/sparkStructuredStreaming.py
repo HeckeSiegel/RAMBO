@@ -47,7 +47,7 @@ class kafka_spark_stream:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap) \
             .option("subscribe", topic) \
-            .option("startingOffsets", "earliest") \
+            .option("startingOffsets", "latest") \
             .load()
 
         schema = StructType() \
@@ -360,7 +360,7 @@ class backtest:
         stocksOwned : Number of stocks owned
         stockPrice : Price to buy a certain stock
         position : either 1=sell, 0=hold, buy=-1
-        commission : Percentage of broker commission
+        commission : costs per trade in $
         trades : Number of trades
 
         Returns
@@ -372,17 +372,17 @@ class backtest:
 
         """
         
-        if (position < 0) and (moneyOwned>stockPrice*(1+commission)) :
+        if (position < 0) and (moneyOwned>(stockPrice+commission)) :
         # buy as many stocks as possible stock
             stocksBuy = int(moneyOwned / stockPrice)
-            moneyOwned -= stockPrice*stocksBuy*(1+commission)
+            moneyOwned -= (stockPrice*stocksBuy+commission*stocksBuy)
             trades += stocksBuy
             stocksOwned += stocksBuy
         elif (position > 0) and (stocksOwned>0) :
         # sell all stocks
-            trades += stocksOwned
             stocksSell = stocksOwned
-            moneyOwned += stocksSell*stockPrice*(1-commission)
+            moneyOwned += (stocksSell*stockPrice-commission*stocksSell)
+            trades += stocksSell
             stocksOwned = 0
         return (moneyOwned, stocksOwned, trades)
     
@@ -419,6 +419,30 @@ class backtest:
         
         return momentum_df.select("Datetime",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
     
+    def buy_and_hold_position(self, symbol, interval, sqlContext, hdfs_path):
+        """
+        
+
+        Parameters
+        ----------
+        symbol : stock ticker
+        interval : granularity of stock prices
+        sqlContext : from spark session
+        hdfs_path : local -> "hdfs://0.0.0.0:19000"
+
+        Returns
+        -------
+        Dataframe with time, price and position -1 (=buy) for all prices
+
+        """
+        data = history().from_hdfs(symbol, interval, sqlContext, hdfs_path)
+        data_close = data.select("Datetime","Close").orderBy("Datetime")
+        position = "Position"+symbol
+        close = "Close"+symbol
+        data_position = data_close.withColumn(position, lit(-1))
+        
+        return data_position.withColumnRenamed("Close",close)
+    
     def momentum_portfolio_position(self, symbol, interval, momentum, sqlContext, hdfs_path):
         """
         Getting the positions for the momentum strategy of a whole portfolio
@@ -445,9 +469,40 @@ class backtest:
         for i in range(1,len(symbol)):
             df0 = self.momentum_position(symbol[i], interval, momentum, sqlContext, hdfs_path)
             df = df.join(df0,"Datetime",how='left')
-            df = df.na.drop()
+        
+        df = df.na.drop()
+        
         return df
-       
+    
+    def buy_and_hold_portfolio_position(self, symbol, interval, sqlContext, hdfs_path):
+        """
+        Positions for buy and hold strategy for a whole portfolio.
+        Parameters
+        ----------
+        symbol : List of symbols in portfolio
+        interval : granularity of stock prices
+        sqlContext : from spark session
+        hdfs_path : local -> "hdfs://0.0.0.0:19000"
+
+        Returns
+        -------
+        df : joined data frame with positions for all stock symbols + nasdaq index
+
+        """
+        # dataframe for positions of momentum strategy
+        df = self.buy_and_hold_position(symbol[0], interval, sqlContext, hdfs_path)
+        # join with nasdaq data to calculate alpha
+        nasdaq = self.buy_and_hold_position("^IXIC", interval, sqlContext, hdfs_path)
+        df = df.join(nasdaq,"Datetime",how='left')
+        
+        for i in range(1,len(symbol)):
+            df0 = self.buy_and_hold_position(symbol[i], interval, sqlContext, hdfs_path)
+            df = df.join(df0,"Datetime",how='left')
+        
+        df = df.na.drop()
+        
+        return df
+    
     def depot(self, depotId, symbol, share, position, startCap, commission, risk_free):
         """
         Calculates performance for given positions
@@ -461,7 +516,8 @@ class backtest:
         momentum : same unit as interval
         startCap: start capital
         commission : percentage of commission broker takes
-
+        risk_free : monthly risk free market return
+        
         Returns
         -------
         value : Wert in $
@@ -532,8 +588,8 @@ class backtest:
                 stocksOwned[i] = result[1]
                 trades_total = result[2]
                 # money currently invested in stocks
-                moneyInStocks_list[i] = stocksOwned[i]*row[close]*(1-commission)
-                moneyInStocks += stocksOwned[i]*row[close]*(1-commission)
+                moneyInStocks_list[i] = (stocksOwned[i]*row[close]-commission*stocksOwned[i])
+                moneyInStocks += moneyInStocks_list[i]
                 # free money that can be used to buy stocks
                 moneyFree += moneyForInvesting[i]
                 beta_current += beta_stocks[symbol[i]]*moneyInStocks_list[i]/value
@@ -545,11 +601,97 @@ class backtest:
             moneyForInvesting = [share[i]*moneyFree for i in range(len(symbol))]
             beta_list.append(beta_current)
             nasdaq_current = row["Close^IXIC"]
-            
+            end_date = row.Datetime
+        
+        # number of days this strategy was tested
+        time = end_date - start_date
+        days = m.ceil(time.total_seconds()/(60*60*24))
+        rf = days * (m.pow(risk_free+1,1/30) - 1) * 100
+        # profit of strategy in $
         profit = value - startCap
+        # performance in %
         performance_depot = (value/startCap - 1)*100
+        # performance of nasdaq index in %
         performance_nasdaq = (nasdaq_current/nasdaq_init - 1)*100
+        # average beta
         beta_avg = m.fsum(beta_list)/len(beta_list)
-        alpha = performance_depot - risk_free - beta_avg*(performance_nasdaq - risk_free)
-        return (value, startCap, profit, start_date, trades_total, performance_depot,beta_avg,alpha)
+        # alpha of portfolio
+        alpha = performance_depot - rf - beta_avg*(performance_nasdaq - rf)
+        
+        return (depotId,value,alpha,beta_avg, startCap, profit, start_date, trades_total, performance_depot, performance_nasdaq)
+    
+    def performance(self, depotId, symbol, share, startCap, commission, risk_free, strategy, interval, hdfs_path, sqlContext):
+        """
+        Calculates performance of given strategy and performance of buy and hold strategy for the same stocks + shares
 
+        Parameters
+        ----------
+        depotId : Individual Id for each depot
+        symbol : List of stock tickers
+        share : Distribution of stocks in %
+        startCap : Start Capital
+        commission : Transaction fee
+        risk_free : Monthly risk free market return
+        strategy : strategy type
+        interval : granularity of stock prices
+        hdfs_path : local -> "hdfs://0.0.0.0:19000"
+        sqlContext : from spark session
+
+        Returns
+        -------
+        performance_data : depot performance for given strategy and buy and hold strategy
+        depot_data : information about strategy
+
+        """
+        if(strategy[0] == "momentum"):
+            # calculate positions for momentum strategy
+            position1 = [self.momentum_portfolio_position(symbol, interval, strategy[1], sqlContext, hdfs_path)]
+            for i in range(2,len(strategy)):
+                pos = self.momentum_portfolio_position(symbol, interval, strategy[i], sqlContext, hdfs_path)
+                position1.append(pos)
+                
+        # calculate performance for momentum strategy        
+        depotId1 = [depotId]
+        performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free)]
+        depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[1]),symbol,share)]
+        for i in range(1,len(position1)):
+            depotId += 1
+            depotId1.append(depotId)
+            depot1 = self.depot(depotId1[i], symbol, share, position1[i], startCap, commission, risk_free)
+            performance_data.append(depot1)
+            data = (depotId1[i],startCap,strategy[0]+str(strategy[i+1]),symbol,share)
+            depot_data.append(data)
+         
+        # performance for buy and hold strategy
+        depotId2 = depotId + 1
+        position2 = self.buy_and_hold_portfolio_position(symbol, interval, sqlContext, hdfs_path)
+        depot2 = self.depot(depotId2, symbol, share, position2, startCap, commission, risk_free)
+        performance_data.append(depot2)
+        data = (depotId2,startCap,"Buy and Hold",symbol,share)
+        depot_data.append(data)
+        
+        # write performance and depot data to hdfs
+        schema_performance = StructType() \
+                .add("DepotId", LongType())\
+                .add("Value",DoubleType())\
+                .add("Alpha", DoubleType())\
+                .add("Beta", DoubleType())\
+                .add("Start-Capital", DoubleType())\
+                .add("Profit", DoubleType())\
+                .add("Start-Date",DateType())\
+                .add("Trades", LongType())\
+                .add("Performance_Strategy", DoubleType())\
+                .add("Performance_Nasdaq", DoubleType())
+        df_performance = sqlContext.createDataFrame(performance_data,schema_performance)
+        df_performance.write.save(hdfs_path+"/performance", format='parquet', mode='append')
+        
+        schema_depot = StructType() \
+                .add("DepotId", LongType())\
+                .add("Start-Caputal",DoubleType())\
+                .add("Strategy", StringType())\
+                .add("ISIN", ArrayType(StringType()))\
+                .add("Share", ArrayType(DoubleType()))
+        df_depot = sqlContext.createDataFrame(depot_data,schema_depot)
+        df_depot.write.save(hdfs_path+"/depot", format='parquet', mode='append')
+        
+        return performance_data,depot_data
