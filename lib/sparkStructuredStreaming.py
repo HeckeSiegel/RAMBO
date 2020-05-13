@@ -184,7 +184,7 @@ class kafka_spark_stream:
             .start()            
         return writeDF
 
-    def write_hdfs(self,df,hdfs_path,output_dir,partition):
+    def write_hdfs(self,df,hdfs_path,output_dir):
         """
         Parameters
         ----------
@@ -198,15 +198,15 @@ class kafka_spark_stream:
         writeDF : Stream that's being saved in hdfs
 
         """
+        checkpoint = str(np.random.randint(1,100000000))
         writeDF = df \
             .writeStream \
-            .queryName("write_hdfs") \
+            .queryName(output_dir) \
             .trigger(processingTime='1 seconds') \
             .outputMode("append") \
             .format("parquet") \
-            .option("checkpointLocation",hdfs_path +"/checkpoint"+"/"+output_dir) \
+            .option("checkpointLocation",hdfs_path +"/checkpoint"+"/"+checkpoint) \
             .option("path", hdfs_path +"/"+ output_dir) \
-            .partitionBy(partition) \
             .start()
         return writeDF
             
@@ -421,7 +421,8 @@ class backtest:
     
     def buy_and_hold_position(self, symbol, interval, sqlContext, hdfs_path):
         """
-        
+        Strategy that just buys as many stocks as possible (until no more money) and holds
+        onto them.
 
         Parameters
         ----------
@@ -541,8 +542,6 @@ class backtest:
         start_date_count = 0
         # distribution of cash which can be invested
         moneyForInvesting =[startCap*share[0]]
-        # cash which shall not be invested
-        cash = startCap*share[-1]
         # dictionary with betas for all symbols
         beta_stocks = YahooFinancials(symbol).get_beta()
         beta_list = []
@@ -572,10 +571,10 @@ class backtest:
             # set to 0 before every trading cycle to calculate new
             moneyInStocks = 0
             
-            # cash + whichever money will not be invested
-            moneyFree = cash
+            # money which will not be invested
+            moneyFree = 0
             
-            # calculate beta for each cash distribution new
+            # calculate beta for each moneyInStocks distribution new
             beta_current = 0
             
             # go through all companies
@@ -596,8 +595,6 @@ class backtest:
                 
             # total current value of depot (free money + invested money)
             value = moneyInStocks + moneyFree
-            # distribution of free money has to be distributed new after every trade
-            cash = share[-1]*moneyFree
             moneyForInvesting = [share[i]*moneyFree for i in range(len(symbol))]
             beta_list.append(beta_current)
             nasdaq_current = row["Close^IXIC"]
@@ -623,6 +620,7 @@ class backtest:
     def performance(self, depotId, symbol, share, startCap, commission, risk_free, strategy, interval, hdfs_path, sqlContext):
         """
         Calculates performance of given strategy and performance of buy and hold strategy for the same stocks + shares
+        so that one can compare if it would have been better to just buy and hold the stocks
 
         Parameters
         ----------
@@ -695,3 +693,178 @@ class backtest:
         df_depot.write.save(hdfs_path+"/depot", format='parquet', mode='append')
         
         return performance_data,depot_data
+    
+class realtime:
+    """class to simulate trading with realtime stock data"""
+    
+    def buy_and_hold(self, df, symbol, *args):
+        """
+        Calculates positions for buy and hold strategy
+
+        Parameters
+        ----------
+        df : Dataframe that cointains Columns "symbol", "Datetime", "latestPrice"
+        symbol : Stock ticker
+        *args : Does nothing, just necessary for the loop later
+
+        Returns
+        -------
+        Dataframe with Buy and Hold positions.
+
+        """
+        return df.filter(df.symbol == symbol).withColumn("Position", lit(-1)).orderBy("Datetime",ascending=False)
+
+    def momentum(self, df, symbol, mom):
+        df = df.filter(df.symbol == symbol).groupBy("Datetime").agg(max("latestPrice").alias("latestPrice"))
+        
+        shift = df.select("latestPrice","Datetime")\
+                    .withColumn("latestPrice_shift", lag(df.latestPrice)\
+                    .over(Window.partitionBy().orderBy("Datetime")))
+        
+        returns = shift\
+                    .withColumn("returns",log(col("latestPrice")/col("latestPrice_shift")))
+        
+        position = returns.\
+                    withColumn("Position",signum(avg("returns")\
+                    .over(Window.partitionBy().rowsBetween(-mom,0))))
+        
+        return position.select("latestPrice","Datetime","Position").orderBy("Datetime", ascending = False).na.drop()
+    
+    def realtime_init(self, symbol, share, startCap, commission, strategy, sqlContext):
+        """
+        Initialize variables for realtime trading simulation
+
+        Parameters
+        ----------
+        symbol : stock ticker
+        share : distribution of money
+        startCap : start capital
+        commission : trading fees
+        strategy : trading strategy, has to be array eg.: [momentum,"momentum",10]
+        momentum = function that calculates position for momentum strategy
+        "momentum" = hdfs directory with realtime data for momentum strategy
+        sqlContext : from spark session
+
+        Returns
+        -------
+        value : value of depot = moneyInvested + moneyFree
+        datetime : latest time when stock was bought/sold
+        moneyForInvesting_list : list of free money for each stock
+        moneyInStocks_list : list of invested money for each stock
+        stocksOwned : list of owned shares for each stock
+        trades_total : total number of trades
+
+        """
+        hdfs_path = "hdfs://0.0.0.0:19000"
+        b = backtest()
+        # number of stocks owned for each company
+        stocksOwned = []
+        # total number of trades
+        trades_total = 0
+        # money which can be invested
+        moneyForInvesting_list = []
+        moneyForInvesting = 0
+        # money in stocks for indiviudal companys and total
+        moneyInStocks_list = []
+        moneyInStocks = 0
+        # keep track of current date
+        datetime = []
+        # do a first loop
+        for i in range(len(symbol)):
+            moneyForInvesting_list.append(startCap*share[i])
+            # no stocks in the beginning
+            stocksOwned.append(0)
+            # no money in stocks in the beginning
+            moneyInStocks_list.append(0)
+            # read in realtime stock data
+            df = sqlContext.read.format('parquet').load(hdfs_path+"/realtime/"+strategy[1])
+            # filter out right symbol, get latest price
+            df = strategy[0](df, symbol[i],strategy[2])
+            # collect dataframe to use values in columns
+            rows = df.collect()[0]
+            # save current datetime to compare with next one
+            datetime.append(rows.Datetime)
+            # rows[0][1] is current price of stock, rows[0][3] is position
+            result = b.SimulateTrading(moneyForInvesting_list[i], stocksOwned[i], rows.latestPrice, rows.Position, commission, trades_total)
+            moneyForInvesting_list[i] = result[0]
+            stocksOwned[i] = result[1]
+            trades_total = result[2]
+            # money currently invested in stocks
+            moneyInStocks_list[i] = (stocksOwned[i]*(rows.latestPrice-commission))
+            moneyInStocks += moneyInStocks_list[i]
+            # free money that can be used to buy stocks
+            moneyForInvesting += moneyForInvesting_list[i]
+            
+        value = moneyForInvesting + moneyInStocks
+        moneyForInvesting_list = [share[i]*moneyForInvesting for i in range(len(symbol))]
+        
+        return value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total
+    
+    def realtime_loop(self,value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, symbol, share, commission, strategy, sqlContext):
+        """
+        After initializing use this function in loop to get realtime trading simulation
+
+        Parameters
+        ----------
+        value : value of depot = moneyInvested + moneyFree
+        datetime : latest time when stock was bought/sold
+        moneyForInvesting_list : list of free money for each stock
+        moneyInStocks_list : list of invested money for each stock
+        stocksOwned : list of owned shares for each stock
+        trades_total : total number of trades
+        symbol : list of stock tickers
+        share : distribution of money
+        commission : fee for trading
+        strategy : trading strategy, has to be array eg.: [momentum,"momentum",10]
+        momentum = function that calculates position for momentum strategy
+        "momentum" = hdfs directory with realtime data for momentum strategy
+        sqlContext : from spark session
+
+        Returns
+        -------
+        value : value of depot = moneyInvested + moneyFree
+        datetime : latest time when stock was bought/sold
+        moneyForInvesting_list : list of free money for each stock
+        moneyInStocks_list : list of invested money for each stock
+        stocksOwned : list of owned shares for each stock
+        trades_total : total number of trades
+
+        """
+        hdfs_path = "hdfs://0.0.0.0:19000"
+        b = backtest()
+        
+        # current value before trading
+        value_init = value
+                
+        # set to 0 before every trading cycle to calculate new
+        moneyInStocks = 0
+                
+        # cash + whichever money will not be invested
+        moneyForInvesting = 0
+                
+        # go through all companies
+        for i in range(len(symbol)):
+            date = datetime[i]
+            # read in realtime stock data
+            df = sqlContext.read.format('parquet').load(hdfs_path+"/realtime/"+strategy[1])
+            # filter out right symbol, get latest price
+            df = strategy[0](df, symbol[i],strategy[2])
+            rows = df.collect()[0]
+            # only proceed if there is a new stock price available
+            if(date is not rows.Datetime):
+                datetime[i] = rows.Datetime
+                # rows[0][1] is current price of stock, rows[0][3] is position
+                result = b.SimulateTrading(moneyForInvesting_list[i], stocksOwned[i], rows.latestPrice, rows.Position, commission, trades_total)
+                moneyForInvesting_list[i] = result[0]
+                stocksOwned[i] = result[1]
+                trades_total = result[2]
+            # money currently invested in stocks
+            moneyInStocks_list[i] = (stocksOwned[i]*(rows.latestPrice-commission))
+            moneyInStocks += moneyInStocks_list[i]
+            # free money that can be used to buy stocks
+            moneyForInvesting += moneyForInvesting_list[i]
+                
+        value = moneyForInvesting + moneyInStocks
+        moneyForInvesting_list = [share[i]*moneyForInvesting for i in range(len(symbol))]
+        
+        return value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total

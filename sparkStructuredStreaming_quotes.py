@@ -19,10 +19,14 @@ get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.
 #for hdfs to partition the data by date 
 get_date = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d"))
 
+#for robo visor
+get_datetime_r = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d %H:%M:%S"))
+position = udf(lambda x : -1)
+
 # initialize spark session and define hdfs path to write into 
 bootstrap = sys.argv[1]
 hdfs_path = "hdfs://0.0.0.0:19000"
-output_dir = "iex/quotes"
+output_dir = "realtime"
 
 spark = SparkSession \
             .builder \
@@ -48,9 +52,16 @@ selectDF_es = parsedDF \
         .select(explode(array("quote_data")))\
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
 
+# for robo visor
+selectDF = parsedDF \
+        .select(explode(array("quote_data")))\
+        .select("col.*",get_datetime_r("col.latestUpdate").cast("Timestamp").alias("Datetime"))
+selectDF = selectDF.select("Datetime","latestPrice","symbol")\
+            .withColumn("Position",position("latestPrice"))
+            
 # write streams either into hdfs, console, es or all at once        
-#sss.write_hdfs(selectDF_hdfs,hdfs_path, output_dir,"date") 
-sss.write_console(selectDF_es)
+sss.write_hdfs(selectDF,hdfs_path, output_dir) 
+#sss.write_console(selectDF_es)
 #sss.write_es(selectDF_es,"latestUpdate","quotes")
 
 spark.streams.awaitAnyTermination()
