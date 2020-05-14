@@ -419,6 +419,70 @@ class backtest:
         
         return momentum_df.select("Datetime",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
     
+    def calculate_mean_reverse(self, symbol, interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path):        
+        """        
+        Calculates positions for mean reversion strategy  
+    
+        Parameters        
+        ----------        
+        symbol : stock ticker        
+        interval : interval of trading 
+        rsi_interval : interval for calculating the RSI (Relative Strength Index) ----> ex: 3 
+        rsi_buy : if the RSI is under this level, this is rule to buy ----> ex: 15
+        rsi_sell : if the RSI is above this level, this is rule to sell ----> ex: 60
+        ibr_buy : if the IBR is under this level, this is rule to buy ----> ex: 0.2
+        ibr_sell : if the IBR is above this level, this is rule to sell ----> ex: 0.7
+        spark : spark session      
+    
+        Returns        
+        -------      
+        Dataframe with date, closing price and position     
+        """
+    
+        data = history().from_hdfs(symbol, interval, sqlContext, hdfs_path) 
+        #Calculating RSI (Relative Strength Index)
+        df = data.select("Close","Date","Low","High").withColumn("Close_prev", lag(data.Close).over(Window.partitionBy().orderBy("Date")))
+        df = df.withColumn("Change",df.Close-df.Close_prev)
+        df = df.withColumn("Ups", when(col("Change") > 0, col("Change")).otherwise(0))
+        df = df.withColumn("Downs", when(col("Change") < 0, -col("Change")).otherwise(0))
+        df = df.withColumn("Higher", when(col("Change") > 0, 1).otherwise(0))
+        df = df.withColumn("Lower", when(col("Change") < 0, 1).otherwise(0))
+        df = df.withColumn("Higher_count",sum("Higher").over(Window.partitionBy().rowsBetween(-rsi_interval,0))) 
+        df = df.withColumn("Lower_count",sum("Lower").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.na.drop()
+        df = df.withColumn("AvgU", avg("Ups").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.withColumn("AvgD", avg("Downs").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.withColumn("RS",df.AvgU/df.AvgD)
+        df = df.withColumn("RSI",100 - 100/(1+df.RS))
+        #Calculating MA (Moving Average) over 200 days
+        df = df.withColumn("MA200", avg("Close_prev").over(Window.partitionBy().rowsBetween(-200,0)))
+        #Calculating IBR (Internal Bar Range)
+        df = df.withColumn("IBR", (df.Close - df.Low)/(df.High - df.Low))
+
+        #Buy conditions
+        condRSIbuy = col("RSI") < rsi_buy
+        condMAbuy = col("Close") > col("MA200")
+        condIBRbuy = col("IBR") < ibr_buy
+
+        #Sell conditions
+        condRSIsell = col("RSI") > rsi_sell
+        condIBRsell = col("IBR") > ibr_sell
+
+        df = df.withColumn("Position", when((condRSIbuy & condMAbuy & condIBRbuy), -1).otherwise(when((condRSIsell & condIBRsell), 1).otherwise(0)))
+
+
+        close_new = 'Close' + symbol
+        position_new = 'Position' + symbol
+        date_new = 'Datetime'
+        df = df.select(df["Date"].alias(date_new), df["Close"].alias(close_new),df["Position"].alias(position_new))
+    
+        df_final = df.na.drop()
+    
+        return df_final
+    
+    
+    
+    
     def buy_and_hold_position(self, symbol, interval, sqlContext, hdfs_path):
         """
         Strategy that just buys as many stocks as possible (until no more money) and holds
@@ -437,7 +501,10 @@ class backtest:
 
         """
         data = history().from_hdfs(symbol, interval, sqlContext, hdfs_path)
-        data_close = data.select("Datetime","Close").orderBy("Datetime")
+        if (interval in ["1d","5d","1wk","1mo","3mo"]):
+            data_close = data.select(data["Date"].alias("Datetime"),"Close").orderBy("Datetime") 
+        else:
+            data_close = data.select("Datetime","Close").orderBy("Datetime")
         position = "Position"+symbol
         close = "Close"+symbol
         data_position = data_close.withColumn(position, lit(-1))
@@ -473,6 +540,42 @@ class backtest:
         
         df = df.na.drop()
         
+        return df
+    
+    def mean_reverse_portfolio_position(self, symbol, interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path):        
+        """        
+        Getting the positions for the mean reverse strategy of a whole portfolio        
+        
+        Parameters        
+        ----------        
+        symbol : stock ticker 
+        interval : granularity of stock prices 
+        rsi_interval : interval for calculating the RSI (Relative Strength Index) ----> ex: 3 
+        rsi_buy : if the RSI is under this level, this is rule to buy ----> ex: 15
+        rsi_sell : if the RSI is above this level, this is rule to sell ----> ex: 60
+        ibr_buy : if the IBR is under this level, this is rule to buy ----> ex: 0.2
+        ibr_sell : if the IBR is above this level, this is rule to sell ----> ex: 0.7
+            
+        sqlContext : from spark session       
+        hdfs_path : local -> "hdfs://0.0.0.0:9000"
+    
+        Returns        
+        -------        
+        df : dataframe with all closing prices and positions     
+        """      
+        # dataframe for positions of momentum strategy      
+        df = self.calculate_mean_reverse(symbol[0], interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path)  
+           
+        for i in range(1,len(symbol)): 
+            if (symbol[i] != "^IXIC"):
+                df0 = self.calculate_mean_reverse(symbol[i], interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path)         
+                df = df.join(df0,"Datetime",how='left')   
+        
+        # join with nasdaq data to calculate alpha    
+        nasdaq = self.calculate_mean_reverse("^IXIC", interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path)      
+        df = df.join(nasdaq,"Datetime",how='left')
+        df = df.na.drop()
+    
         return df
     
     def buy_and_hold_portfolio_position(self, symbol, interval, sqlContext, hdfs_path):
@@ -648,7 +751,18 @@ class backtest:
                 pos = self.momentum_portfolio_position(symbol, interval, strategy[i], sqlContext, hdfs_path)
                 position1.append(pos)
                 
-        # calculate performance for momentum strategy        
+        if (strategy[0] == "mean_reverse"):
+            rsi_buy = strategy[1]
+            rsi_sell = strategy[2]
+            ibr_buy = strategy[3]
+            ibr_sell = strategy[4]
+            #calculate positions for mean reverse strategy
+            position1 = [self.mean_reverse_portfolio_position(symbol, interval, strategy[5], rsi_buy, rsi_sell, ibr_buy, ibr_sell,  sqlContext, hdfs_path)]
+            for i in range(6,len(strategy)):            
+                pos = self.mean_reverse_portfolio_position(symbol, interval, strategy[i], rsi_buy, rsi_sell, ibr_buy, ibr_sell,sqlContext, hdfs_path)    
+                position1.append(pos)
+        
+        # calculate performance for strategy        
         depotId1 = [depotId]
         performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free)]
         depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[1]),symbol,share)]
