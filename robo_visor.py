@@ -14,15 +14,13 @@ arg = "127.0.0.1:9092" (local) //"10.0.0.8:9092" (BACC)
 Replace "C:" with the path to your elasticsearch-hadoop directory
 """
 
-get_datetime = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d %H:%M:%S"))
-get_datetime_minute = udf(lambda x : datetime.datetime.fromtimestamp(x/ 1000.0).strftime("%Y-%m-%d %H:%M"))
+get_datetime = udf(lambda x : datetime.datetime.fromtimestamp((x-7200000)/ 1000.0).strftime("%Y-%m-%d"'T'"%H:%M:%S"))
                
 # initialize spark session and define hdfs path to write into 
 bootstrap = sys.argv[1]
-mom = "10 minutes"
+
 hdfs_path = "hdfs://0.0.0.0:19000"
-output_dir_bnh = "realtime/buyAndHold"
-output_dir_momentum = "realtime/momentum"
+output_dir = "realtime"
 
 spark = SparkSession \
             .builder \
@@ -40,13 +38,10 @@ selectDF = parsedDF \
         .select(explode(array("quote_data")))\
         .select("col.*")
         
-selectDF_bnh = selectDF.select(get_datetime("latestUpdate").cast("Timestamp").alias("Datetime"),"latestPrice","symbol")
-
-selectDF_mom = selectDF.select(get_datetime_minute("latestUpdate").cast("Timestamp").alias("Datetime"),"latestPrice","symbol")
+selectDF= selectDF.select(get_datetime("latestUpdate").cast("Timestamp").alias("Datetime"),"latestPrice","symbol")
 
 # write into hdfs     
-sss.write_hdfs(selectDF_bnh,hdfs_path, output_dir_bnh)
-sss.write_hdfs(selectDF_mom,hdfs_path, output_dir_momentum)
+sss.write_hdfs(selectDF,hdfs_path, output_dir)
 #sss.write_console(selectDF_mom)
 
 spark.streams.awaitAnyTermination()

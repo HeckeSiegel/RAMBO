@@ -51,13 +51,6 @@ selectDF_hdfs = parsedDF \
 selectDF_es = parsedDF \
         .select(explode(array("quote_data")))\
         .select("col.*",get_datetime("col.latestUpdate").cast("String").alias("date"))
-
-# for robo visor
-selectDF = parsedDF \
-        .select(explode(array("quote_data")))\
-        .select("col.*",get_datetime_r("col.latestUpdate").cast("Timestamp").alias("Datetime"))
-selectDF = selectDF.select("Datetime","latestPrice","symbol")\
-            .withColumn("Position",position("latestPrice"))
             
 # write streams either into hdfs, console, es or all at once        
 sss.write_hdfs(selectDF,hdfs_path, output_dir) 
