@@ -811,7 +811,7 @@ class backtest:
 class realtime:
     """class to simulate trading with realtime stock data"""
     
-    def buy_and_hold(self, df, symbol, *args):
+    def buy_and_hold(self, df, *args):
         """
         Calculates positions for buy and hold strategy
 
@@ -826,10 +826,9 @@ class realtime:
         Dataframe with Buy and Hold positions.
 
         """
-        return df.filter(df.symbol == symbol).withColumn("Position", lit(-1)).orderBy("Datetime",ascending=False)
+        return df.withColumn("Position", lit(-1)).orderBy("Datetime",ascending=False)
 
-    def momentum(self, df, symbol, mom):
-        df = df.filter(df.symbol == symbol).groupBy("Datetime").agg(max("latestPrice").alias("latestPrice"))
+    def momentum(self, df, mom):
         
         shift = df.select("latestPrice","Datetime")\
                     .withColumn("latestPrice_shift", lag(df.latestPrice)\
@@ -844,7 +843,7 @@ class realtime:
         
         return position.select("latestPrice","Datetime","Position").orderBy("Datetime", ascending = False).na.drop()
     
-    def realtime_init(self, symbol, share, startCap, commission, strategy, sqlContext):
+    def realtime_init(self, df, symbol, share, startCap, commission, strategy, sqlContext):
         """
         Initialize variables for realtime trading simulation
 
@@ -890,12 +889,12 @@ class realtime:
             stocksOwned.append(0)
             # no money in stocks in the beginning
             moneyInStocks_list.append(0)
-            # read in realtime stock data
-            df = sqlContext.read.format('parquet').load(hdfs_path+"/realtime/"+strategy[1])
-            # filter out right symbol, get latest price
-            df = strategy[0](df, symbol[i],strategy[2])
+            # look only at stocks from one symbol at a time
+            df_sym = df.filter(col("symbol") == symbol[i])
+            # get latest position
+            df_pos = strategy[0](df, strategy[1])
             # collect dataframe to use values in columns
-            rows = df.collect()[0]
+            rows = df_pos.collect()[0]
             # save current datetime to compare with next one
             datetime.append(rows.Datetime)
             # rows[0][1] is current price of stock, rows[0][3] is position
@@ -914,7 +913,7 @@ class realtime:
         
         return value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total
     
-    def realtime_loop(self,value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, symbol, share, commission, strategy, sqlContext):
+    def realtime_loop(self, df, value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, symbol, share, commission, strategy, sqlContext):
         """
         After initializing use this function in loop to get realtime trading simulation
 
@@ -955,31 +954,78 @@ class realtime:
                 
         # cash + whichever money will not be invested
         moneyForInvesting = 0
-        
                 
         # go through all companies
         for i in range(len(symbol)):
-            date = datetime[i]
-            # read in realtime stock data
-            df = sqlContext.read.format('parquet').load(hdfs_path+"/realtime/"+strategy[1])
-            # filter out right symbol, get latest price
-            df = strategy[0](df, symbol[i],strategy[2])
-            rows = df.collect()[0]
-            # only proceed if there is a new stock price available
-            if(date is not rows.Datetime):
+            # look only at stocks from one symbol at a time
+            df_sym = df.filter(col("symbol") == symbol[i])
+            # get latest position
+            df_pos = strategy[0](df,strategy[1])
+            rows = df_pos.collect()[0]
+            # if there is no new price skip update
+            if(datetime[i] == rows.Datetime):
+                continue
+            else:
                 datetime[i] = rows.Datetime
-                # rows[0][1] is current price of stock, rows[0][3] is position
                 result = b.SimulateTrading(moneyForInvesting_list[i], stocksOwned[i], rows.latestPrice, rows.Position, commission, trades_total)
+                # update depot
                 moneyForInvesting_list[i] = result[0]
                 stocksOwned[i] = result[1]
                 trades_total = result[2]
-            # money currently invested in stocks
-            moneyInStocks_list[i] = (stocksOwned[i]*(rows.latestPrice-commission))
-            moneyInStocks += moneyInStocks_list[i]
-            # free money that can be used to buy stocks
-            moneyForInvesting += moneyForInvesting_list[i]
+                # money currently invested in stocks
+                moneyInStocks_list[i] = (stocksOwned[i]*(rows.latestPrice-commission))
+                moneyInStocks += moneyInStocks_list[i]
+                # free money that can be used to buy stocks
+                moneyForInvesting += moneyForInvesting_list[i]
                 
         value = moneyForInvesting + moneyInStocks
         moneyForInvesting_list = [share[i]*moneyForInvesting for i in range(len(symbol))]
         
         return value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total
+    
+    def realtime_simulation_es(self, symbol, share, startCap, commission, strategy, index, sqlContext):
+        
+        es=Elasticsearch([{'host':'localhost','port':9200}])
+        # compare momentum strategy with buy and hold
+        strategy_b = [self.buy_and_hold,10]
+        
+        # read in realtime stock data
+        df_init = sqlContext.read.format('parquet').load("hdfs://0.0.0.0:19000/realtime")
+        
+        # initialize both strategys
+        init_strategy = self.realtime_init(df_init,symbol, share, startCap, commission, strategy, sqlContext)
+        init_b = self.realtime_init(df_init,symbol, share, startCap, commission, strategy_b, sqlContext)
+        value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total = init_strategy
+        value_b, datetime_b, moneyForInvesting_list_b, moneyInStocks_list_b, stocksOwned_b, trades_total_b = init_b
+        
+        doc = {}
+        doc['date'] = datetime[0]
+        doc['value_momentum'] = value
+        doc['value_buy_and_hold'] = value_b
+        res = es.index(index=index, body=doc)
+        print(datetime[0], value, value_b)
+        while(True):
+            # save last date to compare with current
+            last_date = datetime[0]
+            
+            # read in realtime stock data
+            df = sqlContext.read.format('parquet').load("hdfs://0.0.0.0:19000/realtime")
+            
+            # update depot and stocksOwned in loop until break
+            depot_strategy = self.realtime_loop(df, value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned,\
+                                           trades_total, symbol, share, commission, strategy, sqlContext)
+            depot_b = self.realtime_loop(df, value_b, datetime_b, moneyForInvesting_list_b, moneyInStocks_list_b, stocksOwned_b,\
+                                      trades_total_b, symbol, share, commission, strategy_b, sqlContext)
+            value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total = depot_strategy
+            value_b, datetime_b, moneyForInvesting_list_b, moneyInStocks_list_b, stocksOwned_b, trades_total_b = depot_b
+            
+            current_date = datetime[0]
+            if(last_date == current_date):
+                continue
+            else:
+                # write values into elasticsearch for visualisation
+                doc = {}
+                doc['date'] = current_date
+                doc['value_momentum'] = value
+                doc['value_buy_and_hold'] = value_b
+                res = es.index(index=index, body=doc)
