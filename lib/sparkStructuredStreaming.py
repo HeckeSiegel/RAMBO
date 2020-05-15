@@ -377,17 +377,17 @@ class backtest:
 
         """
         
-        if (position < 0) and (moneyOwned>(stockPrice+commission)) :
+        if (position > 0) and (moneyOwned>(stockPrice+commission)) :
         # buy as many stocks as possible stock
             stocksBuy = int(moneyOwned / stockPrice)
             moneyOwned -= (stockPrice*stocksBuy+commission*stocksBuy)
-            trades += stocksBuy
+            trades += 1
             stocksOwned += stocksBuy
-        elif (position > 0) and (stocksOwned>0) :
+        elif (position < 0) and (stocksOwned>0) :
         # sell all stocks
             stocksSell = stocksOwned
             moneyOwned += (stocksSell*stockPrice-commission*stocksSell)
-            trades += stocksSell
+            trades += 1
             stocksOwned = 0
         return (moneyOwned, stocksOwned, trades)
     
@@ -473,7 +473,7 @@ class backtest:
         condRSIsell = col("RSI") > rsi_sell
         condIBRsell = col("IBR") > ibr_sell
 
-        df = df.withColumn("Position", when((condRSIbuy & condMAbuy & condIBRbuy), -1).otherwise(when((condRSIsell & condIBRsell), 1).otherwise(0)))
+        df = df.withColumn("Position", when((condRSIbuy & condMAbuy & condIBRbuy), 1).otherwise(when((condRSIsell & condIBRsell), -1).otherwise(0)))
 
 
         close_new = 'Close' + symbol
@@ -512,7 +512,7 @@ class backtest:
             data_close = data.select("Datetime","Close").orderBy("Datetime")
         position = "Position"+symbol
         close = "Close"+symbol
-        data_position = data_close.withColumn(position, lit(-1))
+        data_position = data_close.withColumn(position, lit(1))
         
         return data_position.withColumnRenamed("Close",close)
     
@@ -733,7 +733,20 @@ class backtest:
         performance = (last.Close/first.Close - 1)*100
         return (performance)
     
-    def performance(self, depotId, symbol, share, startCap, commission, risk_free, strategy, interval, hdfs_path, sqlContext):
+    def depotId_func(self, sqlContext, hdfs_path):
+        """
+        Finds out latest depotid
+
+        """
+        try:
+            df = sqlContext.read.format('parquet').load(hdfs_path+"/performance").orderBy(col("DepotId").desc())
+            depotId = df.first() + 1
+        except:
+            depotId = 1
+            
+        return depotId
+    
+    def performance(self, symbol, share, startCap, commission, risk_free, strategy, interval, hdfs_path, sqlContext):
         """
         Calculates performance of given strategy and performance of buy and hold strategy for the same stocks + shares
         so that one can compare if it would have been better to just buy and hold the stocks
@@ -757,6 +770,7 @@ class backtest:
         depot_data : information about strategy
 
         """
+        depotId = self.depotId_func(sqlContext, hdfs_path)
         beta = YahooFinancials(symbol).get_beta()
         market = self.market_performance(interval, sqlContext, hdfs_path)
         
@@ -852,7 +866,7 @@ class realtime:
         Dataframe with Buy and Hold positions.
 
         """
-        return df.filter(col("symbol") == symbol).withColumn("Position", lit(-1)).orderBy("Datetime",ascending=False)
+        return df.filter(col("symbol") == symbol).withColumn("Position", lit(1)).orderBy("Datetime",ascending=False)
 
     def momentum(self, df, symbol, mom):
         df = df.filter(col("symbol") == symbol)

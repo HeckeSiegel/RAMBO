@@ -29,5 +29,5 @@ while True:
         doc['date'] = date_es
         res = es.index(index="sector", body=doc)
         
-    time.sleep(10)
+    time.sleep(60)
         
