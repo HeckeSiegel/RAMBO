@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
 from pyspark.sql import SQLContext
-from pyspark.sql.functions import *
+from pyspark.sql import functions as F
 from pyspark.sql.types import *
 import numpy as np
 import yfinance as yf
@@ -10,6 +10,9 @@ from pyspark.sql.window import Window
 from elasticsearch import Elasticsearch
 from yahoofinancials import YahooFinancials
 import math as m
+from alpha_vantage.sectorperformance import SectorPerformances
+import operator
+import pandas as pd
 
 class kafka_spark_stream:
     
@@ -87,7 +90,7 @@ class kafka_spark_stream:
                 .add("isUSMarketOpen", BooleanType())
         
         parsedDF = streamingDF\
-                .select(col("key").cast("String"), from_json(col("value").cast("string"), schema).alias("quote_data"))
+                .select(F.col("key").cast("String"), F.from_json(F.col("value").cast("string"), schema).alias("quote_data"))
                 
         return parsedDF
     
@@ -105,20 +108,20 @@ class kafka_spark_stream:
             .option("startingOffsets", "earliest") \
             .load()
         
-        parsedDF = streamingDF.select(col("key").cast("String"), col("value").cast("string"))
+        parsedDF = streamingDF.select(F.col("key").cast("String"), F.col("value").cast("string"))
         
         # this step was necessary because each row contains 10 news
         parsedDF = parsedDF.select(parsedDF.key,\
-                                       explode(array(get_json_object(parsedDF.value, '$[0]'),\
-                                                     get_json_object(parsedDF.value, '$[1]'),\
-                                                     get_json_object(parsedDF.value, '$[2]'),\
-                                                     get_json_object(parsedDF.value, '$[3]'),\
-                                                     get_json_object(parsedDF.value, '$[4]'),\
-                                                     get_json_object(parsedDF.value, '$[5]'),\
-                                                     get_json_object(parsedDF.value, '$[6]'),\
-                                                     get_json_object(parsedDF.value, '$[7]'),\
-                                                     get_json_object(parsedDF.value, '$[8]'),\
-                                                     get_json_object(parsedDF.value, '$[9]'))))
+                                       F.explode(array(F.get_json_object(parsedDF.value, '$[0]'),\
+                                                     F.get_json_object(parsedDF.value, '$[1]'),\
+                                                     F.get_json_object(parsedDF.value, '$[2]'),\
+                                                     F.get_json_object(parsedDF.value, '$[3]'),\
+                                                     F.get_json_object(parsedDF.value, '$[4]'),\
+                                                     F.get_json_object(parsedDF.value, '$[5]'),\
+                                                     F.get_json_object(parsedDF.value, '$[6]'),\
+                                                     F.get_json_object(parsedDF.value, '$[7]'),\
+                                                     F.get_json_object(parsedDF.value, '$[8]'),\
+                                                     F.get_json_object(parsedDF.value, '$[9]'))))
 
         schema = StructType() \
                 .add("datetime", LongType())\
@@ -132,7 +135,7 @@ class kafka_spark_stream:
                 .add("hasPaywall", BooleanType())
         
         parsedDF = parsedDF\
-                .select(parsedDF.key, from_json(parsedDF.col, schema).alias("news_data"))
+                .select(parsedDF.key, F.from_json(parsedDF.col, schema).alias("news_data"))
                 
         return parsedDF
 
@@ -169,7 +172,7 @@ class kafka_spark_stream:
                         .add("primarySisCode", StringType())
         
         parsedDF = streamingDF\
-            .select(col("key").cast("String"), from_json(col("value").cast("string"), schema).alias("company_data"))
+            .select(F.col("key").cast("String"), F.from_json(F.col("value").cast("string"), schema).alias("company_data"))
             
         return parsedDF
     
@@ -276,8 +279,8 @@ class history:
             
         #transform time, add symbol, add unique id    
         spark_history = spark_history.select("Open","High","Low","Close","Volume",get_datetime_yahoo(timestamp).cast("String").alias("date"))
-        spark_history = spark_history.withColumn("symbol", lit(symbol))
-        spark_history = spark_history.withColumn('id',concat(col("date"),col("symbol")))
+        spark_history = spark_history.withColumn("symbol", F.lit(symbol))
+        spark_history = spark_history.withColumn('id',F.concat(F.col("date"),F.col("symbol")))
         
         #write into elasticsearch
         spark_history.write\
@@ -391,39 +394,6 @@ class backtest:
             stocksOwned = 0
         return (moneyOwned, stocksOwned, trades)
     
-    def momentum_position(self, symbol, interval, momentum, sqlContext, hdfs_path):
-        """
-        Calculates positions for momentum strategy
-
-        Parameters
-        ----------
-        symbol : stock ticker
-        interval : interval of trading
-        momentum : same unit as interval
-        spark : spark session
-
-        Returns
-        -------
-        Dataframe with date, closing price and position
-
-        """
-        data_momentum = history().from_hdfs(symbol, interval, sqlContext, hdfs_path)
-            
-        momentum_shift = data_momentum.select("Close","Datetime")\
-                .withColumn("Close_shift", lag(data_momentum.Close)\
-                .over(Window.partitionBy().orderBy("Datetime")))
-                    
-        momentum_returns = momentum_shift\
-                .withColumn("returns",log(momentum_shift.Close/momentum_shift.Close_shift))
-                
-        momentum_df = momentum_returns.\
-                withColumn("position",signum(avg("returns")\
-                .over(Window.partitionBy().rowsBetween(-momentum,0))))
-        close_new = 'Close'+symbol
-        position_new = 'Position'+symbol
-        
-        return momentum_df.select("Datetime",momentum_df['Close'].alias(close_new),momentum_df['position'].alias(position_new)).na.drop()
-    
     def calculate_mean_reverse(self, symbol, interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path):        
         """        
         Calculates positions for mean reversion strategy  
@@ -446,34 +416,34 @@ class backtest:
     
         data = history().from_hdfs(symbol, interval, sqlContext, hdfs_path) 
         #Calculating RSI (Relative Strength Index)
-        df = data.select("Close","Date","Low","High").withColumn("Close_prev", lag(data.Close).over(Window.partitionBy().orderBy("Date")))
+        df = data.select("Close","Date","Low","High").withColumn("Close_prev", F.lag(data.Close).over(Window.partitionBy().orderBy("Date")))
         df = df.withColumn("Change",df.Close-df.Close_prev)
-        df = df.withColumn("Ups", when(col("Change") > 0, col("Change")).otherwise(0))
-        df = df.withColumn("Downs", when(col("Change") < 0, -col("Change")).otherwise(0))
-        df = df.withColumn("Higher", when(col("Change") > 0, 1).otherwise(0))
-        df = df.withColumn("Lower", when(col("Change") < 0, 1).otherwise(0))
-        df = df.withColumn("Higher_count",sum("Higher").over(Window.partitionBy().rowsBetween(-rsi_interval,0))) 
-        df = df.withColumn("Lower_count",sum("Lower").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.withColumn("Ups", F.when(F.col("Change") > 0, F.col("Change")).otherwise(0))
+        df = df.withColumn("Downs", F.when(F.col("Change") < 0, -F.col("Change")).otherwise(0))
+        df = df.withColumn("Higher", F.when(F.col("Change") > 0, 1).otherwise(0))
+        df = df.withColumn("Lower", F.when(F.col("Change") < 0, 1).otherwise(0))
+        df = df.withColumn("Higher_count",F.sum("Higher").over(Window.partitionBy().rowsBetween(-rsi_interval,0))) 
+        df = df.withColumn("Lower_count",F.sum("Lower").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
         df = df.na.drop()
-        df = df.withColumn("AvgU", avg("Ups").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
-        df = df.withColumn("AvgD", avg("Downs").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.withColumn("AvgU", F.avg("Ups").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
+        df = df.withColumn("AvgD", F.avg("Downs").over(Window.partitionBy().rowsBetween(-rsi_interval,0)))
         df = df.withColumn("RS",df.AvgU/df.AvgD)
         df = df.withColumn("RSI",100 - 100/(1+df.RS))
         #Calculating MA (Moving Average) over 200 days
-        df = df.withColumn("MA200", avg("Close_prev").over(Window.partitionBy().rowsBetween(-200,0)))
+        df = df.withColumn("MA200", F.avg("Close_prev").over(Window.partitionBy().rowsBetween(-200,0)))
         #Calculating IBR (Internal Bar Range)
         df = df.withColumn("IBR", (df.Close - df.Low)/(df.High - df.Low))
 
         #Buy conditions
-        condRSIbuy = col("RSI") < rsi_buy
-        condMAbuy = col("Close") > col("MA200")
-        condIBRbuy = col("IBR") < ibr_buy
+        condRSIbuy = F.col("RSI") < rsi_buy
+        condMAbuy = F.col("Close") > F.col("MA200")
+        condIBRbuy = F.col("IBR") < ibr_buy
 
         #Sell conditions
-        condRSIsell = col("RSI") > rsi_sell
-        condIBRsell = col("IBR") > ibr_sell
+        condRSIsell = F.col("RSI") > rsi_sell
+        condIBRsell = F.col("IBR") > ibr_sell
 
-        df = df.withColumn("Position", when((condRSIbuy & condMAbuy & condIBRbuy), 1).otherwise(when((condRSIsell & condIBRsell), -1).otherwise(0)))
+        df = df.withColumn("Position", F.when((condRSIbuy & condMAbuy & condIBRbuy), 1).otherwise(F.when((condRSIsell & condIBRsell), -1).otherwise(0)))
 
 
         close_new = 'Close' + symbol
@@ -483,12 +453,9 @@ class backtest:
     
         df_final = df.na.drop()
     
-        return df_final
+        return df_final  
     
-    
-    
-    
-    def buy_and_hold_position(self, symbol, interval, sqlContext, hdfs_path):
+    def buy_and_hold_portfolio_position(self, df, symbol, interval, period, sqlContext, hdfs_path):
         """
         Strategy that just buys as many stocks as possible (until no more money) and holds
         onto them.
@@ -505,42 +472,41 @@ class backtest:
         Dataframe with time, price and position -1 (=buy) for all prices
 
         """
-        data = history().from_hdfs(symbol, interval, sqlContext, hdfs_path)
+        
         if (interval in ["1d","5d","1wk","1mo","3mo"]):
-            data_close = data.select(data["Date"].alias("Datetime"),"Close").orderBy("Datetime") 
+            timestamp = "Date"
         else:
-            data_close = data.select("Datetime","Close").orderBy("Datetime")
-        position = "Position"+symbol
-        close = "Close"+symbol
-        data_position = data_close.withColumn(position, lit(1))
+            timestamp = "Datetime"
         
-        return data_position.withColumnRenamed("Close",close)
+        spark_df = df.select("*").orderBy(timestamp)
+        
+        for symbol in symbol:
+            position = "Position"+symbol
+            close = "Close"+symbol
+            spark_df = spark_df.withColumn(position, F.lit(1))\
+                .withColumnRenamed(symbol, close)
+        
+        return spark_df.na.drop()
     
-    def momentum_portfolio_position(self, symbol, interval, momentum, sqlContext, hdfs_path):
-        """
-        Getting the positions for the momentum strategy of a whole portfolio
-
-        Parameters
-        ----------
-        symbol : stock ticker
-        interval : granularity of stock prices
-        momentum : parameter of momentum strategy
-        sqlContext : from spark session
-        hdfs_path : local -> "hdfs://0.0.0.0:19000"
-
-        Returns
-        -------
-        df : dataframe with all closing prices and positions
-
-        """
-        # dataframe for positions of momentum strategy
-        df = self.momentum_position(symbol[0], interval, momentum, sqlContext, hdfs_path)
+    def momentum_portfolio_position(self, df, symbol, interval, period, momentum, sqlContext):
         
-        for i in range(1,len(symbol)):
-            df0 = self.momentum_position(symbol[i], interval, momentum, sqlContext, hdfs_path)
-            df = df.join(df0,"Datetime",how='left')
+        spark_df = df.select("*")
         
-        return df.na.drop()
+        for symbol in symbol:
+            spark_df = spark_df.select("*")\
+                        .withColumn(symbol+"_shift", F.lag(F.col(symbol))\
+                        .over(Window.partitionBy().orderBy("Datetime")))
+    
+            spark_df =  spark_df\
+                        .withColumn("returns"+symbol,F.log(F.col(symbol)/F.col(symbol+"_shift")))
+    
+            spark_df = spark_df.\
+                        withColumn("Position"+symbol,F.signum(F.avg("returns"+symbol)\
+                        .over(Window.partitionBy().rowsBetween(-momentum,0))))
+    
+            spark_df = spark_df.drop(symbol+"_shift","returns"+symbol).withColumnRenamed(symbol,"Close"+symbol)
+        
+        return spark_df.na.drop()
     
     def mean_reverse_portfolio_position(self, symbol, interval, rsi_interval, rsi_buy, rsi_sell, ibr_buy, ibr_sell, sqlContext, hdfs_path):        
         """        
@@ -573,29 +539,6 @@ class backtest:
     
         return df.na.drop()
     
-    def buy_and_hold_portfolio_position(self, symbol, interval, sqlContext, hdfs_path):
-        """
-        Positions for buy and hold strategy for a whole portfolio.
-        Parameters
-        ----------
-        symbol : List of symbols in portfolio
-        interval : granularity of stock prices
-        sqlContext : from spark session
-        hdfs_path : local -> "hdfs://0.0.0.0:19000"
-
-        Returns
-        -------
-        df : joined data frame with positions for all stock symbols + nasdaq index
-
-        """
-        # dataframe for positions of momentum strategy
-        df = self.buy_and_hold_position(symbol[0], interval, sqlContext, hdfs_path)
-        
-        for i in range(1,len(symbol)):
-            df0 = self.buy_and_hold_position(symbol[i], interval, sqlContext, hdfs_path)
-            df = df.join(df0,"Datetime",how='left')
-        
-        return df.na.drop()
     
     def depot(self, depotId, symbol, share, position, startCap, commission, risk_free, performance_market, beta_stocks):
         """
@@ -699,13 +642,13 @@ class backtest:
         # performance in %
         performance_depot = (value/startCap - 1)*100
         # average beta
-        beta_avg = m.fsum(beta_list)/len(beta_list)
+        beta_avg = sum(beta_list)/len(beta_list)
         # alpha of portfolio
         alpha = performance_depot - rf - beta_avg*(performance_market - rf)
         
-        return (depotId,value,alpha,beta_avg, startCap, profit, start_date, trades_total, performance_depot, performance_market)
+        return (depotId,round(value,2),round(alpha,2),round(beta_avg,2), startCap, round(profit,2), start_date, end_date, trades_total, round(performance_depot,2), performance_market)
     
-    def market_performance(self, interval, sqlContext, hdfs_path):
+    def market_performance(self, interval, period ,sqlContext, hdfs_path):
         """
         Performance of S&P500 for given interval
 
@@ -724,13 +667,16 @@ class backtest:
             timestamp = "Date"
         else:
             timestamp = "Datetime"
-            
-        snp500 = history().from_hdfs("^GSPC",interval,sqlContext, hdfs_path)
+        
+        historical_pd = yf.download("^GSPC",period=period,interval=interval)
+        historical_pd.reset_index(drop=False, inplace=True)
+        snp500 = sqlContext.createDataFrame(historical_pd)
+        
         snp500acs = snp500.orderBy(timestamp)
         first = snp500acs.first()
-        snp500desc = snp500.orderBy(col(timestamp).desc())
+        snp500desc = snp500.orderBy(F.col(timestamp).desc())
         last = snp500desc.first()
-        performance = (last.Close/first.Close - 1)*100
+        performance = round((last.Close/first.Close - 1)*100,2)
         return (performance)
     
     def depotId_func(self, sqlContext, hdfs_path):
@@ -739,14 +685,60 @@ class backtest:
 
         """
         try:
-            df = sqlContext.read.format('parquet').load(hdfs_path+"/performance").orderBy(col("DepotId").desc())
-            depotId = df.first() + 1
+            df = sqlContext.read.format('parquet').load(hdfs_path+"/performance").orderBy(F.col("DepotId").desc())
+            depotId = df.first().DepotId + 1
         except:
             depotId = 1
             
         return depotId
     
-    def performance(self, symbol, share, startCap, commission, risk_free, strategy, interval, hdfs_path, sqlContext):
+    def momentum_symbols(self, period):
+        """
+        Find symbols for momentum strategy
+
+        Parameters
+        ----------
+        period : "1d" or "5d"
+
+        Returns
+        -------
+        symbols_max : list with symbols
+        share : normalized list of shares
+
+        """
+        sp = SectorPerformances(key='JLD6KKU8CQTZD02V',output_format='json')
+        data, meta_data = sp.get_sector()
+        
+        if(period == "1d"):
+            key = 'Rank A: Real-Time Performance'
+        if(period == "5d"):
+            key = 'Rank C: 5 Day Performance'
+        
+        performance = data[key]
+        sector= max(performance.items(), key=operator.itemgetter(1))[0]
+        
+        if(sector == 'Communication Services'):
+            sector = 'Telecommunication Services'
+            
+        df = pd.read_csv("symbols/constituents.csv", index_col='Symbol').drop(columns='Name')
+    
+        symbol = df[df['Sector'] == sector].index.tolist()
+        share = [1/len(symbol) for i in range(len(symbol)-1)]
+        share.append(1 - sum(share))
+        
+        pandas_history = yf.download(symbol,period=period,interval=period)
+        
+        returns = (pandas_history.iloc[-1]['Close']/pandas_history.iloc[0]['Close'] - 1).dropna()
+        returns_sorted = [k for k, v in sorted(returns.items(), key=lambda item: item[1], reverse=True)]
+        
+        symbols_max = returns_sorted[:4]
+        
+        share = [1/len(symbols_max) for i in range(len(symbols_max)-1)]
+        share.append(1 - sum(share))
+        
+        return symbols_max, share
+    
+    def performance(self, startCap, commission, risk_free, strategy, interval, period, hdfs_path, sqlContext):
         """
         Calculates performance of given strategy and performance of buy and hold strategy for the same stocks + shares
         so that one can compare if it would have been better to just buy and hold the stocks
@@ -770,17 +762,33 @@ class backtest:
         depot_data : information about strategy
 
         """
+        # get symbol + share
+        symbol, share = self.momentum_symbols(period)
+        
+        # get historical data from yahoofincance
+        historical_pd = yf.download(symbol,period=period,interval=interval)
+        historical_pd = historical_pd['Close']
+        historical_pd.reset_index(drop=False, inplace=True)
+        historical_spark = sqlContext.createDataFrame(historical_pd)
+        
+        # get latest depotId
         depotId = self.depotId_func(sqlContext, hdfs_path)
+        
+        # get market beta of individual stocks
         beta = YahooFinancials(symbol).get_beta()
-        market = self.market_performance(interval, sqlContext, hdfs_path)
+        if("^GSPC" in symbol):
+            beta["^GSPC"] = 1.0
+            
+        # get market performance
+        market = self.market_performance(interval, period, sqlContext, hdfs_path)
         
         if(strategy[0] == "momentum"):
             # calculate positions for momentum strategy
-            position1 = [self.momentum_portfolio_position(symbol, interval, strategy[1], sqlContext, hdfs_path)]
+            position1 = [self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[1], sqlContext)]
             for i in range(2,len(strategy)):
-                pos = self.momentum_portfolio_position(symbol, interval, strategy[i], sqlContext, hdfs_path)
+                pos = self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[i], sqlContext)
                 position1.append(pos)
-             # calculate performance for momentum strategy        
+             # calculate performance for momentum strategy
             depotId1 = [depotId]
             performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free, market, beta)]
             depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[1]),symbol,share)]
@@ -816,7 +824,7 @@ class backtest:
  
         # performance for buy and hold strategy
         depotId2 = depotId + 1
-        position2 = self.buy_and_hold_portfolio_position(symbol, interval, sqlContext, hdfs_path)
+        position2 = self.buy_and_hold_portfolio_position(historical_spark, symbol, interval, period, sqlContext, hdfs_path)
         depot2 = self.depot(depotId2, symbol, share, position2, startCap, commission, risk_free, market, beta)
         performance_data.append(depot2)
         data = (depotId2,startCap,"Buy and Hold",symbol,share)
@@ -831,6 +839,7 @@ class backtest:
                 .add("Start-Capital", DoubleType())\
                 .add("Profit", DoubleType())\
                 .add("Start-Date",DateType())\
+                .add("End-Date",DateType())\
                 .add("Trades", LongType())\
                 .add("Performance_Strategy", DoubleType())\
                 .add("Performance_S&P500", DoubleType())
@@ -866,20 +875,20 @@ class realtime:
         Dataframe with Buy and Hold positions.
 
         """
-        return df.filter(col("symbol") == symbol).withColumn("Position", lit(1)).orderBy("Datetime",ascending=False)
+        return df.filter(F.col("symbol") == symbol).withColumn("Position", F.lit(1)).orderBy("Datetime",ascending=False)
 
     def momentum(self, df, symbol, mom):
-        df = df.filter(col("symbol") == symbol)
+        df = df.filter(F.col("symbol") == symbol)
         
         shift = df.select("latestPrice","Datetime")\
-                    .withColumn("latestPrice_shift", lag(df.latestPrice)\
+                    .withColumn("latestPrice_shift", F.lag(df.latestPrice)\
                     .over(Window.partitionBy().orderBy("Datetime")))
         
         returns = shift\
-                    .withColumn("returns",log(col("latestPrice")/col("latestPrice_shift")))
+                    .withColumn("returns",F.log(F.col("latestPrice")/F.col("latestPrice_shift")))
         
         position = returns.\
-                    withColumn("Position",signum(avg("returns")\
+                    withColumn("Position",F.signum(F.avg("returns")\
                     .over(Window.partitionBy().rowsBetween(-mom,0))))
         
         return position.select("latestPrice","Datetime","Position").orderBy("Datetime", ascending = False).na.drop()
