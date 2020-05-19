@@ -4,7 +4,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import *
 import numpy as np
 import yfinance as yf
-import datetime
+from datetime import datetime, timedelta
 from pytz import timezone
 from pyspark.sql.window import Window
 from elasticsearch import Elasticsearch
@@ -13,6 +13,7 @@ import math as m
 from alpha_vantage.sectorperformance import SectorPerformances
 import operator
 import pandas as pd
+from ast import literal_eval
 
 class kafka_spark_stream:
     
@@ -478,7 +479,7 @@ class backtest:
         else:
             timestamp = "Datetime"
         
-        spark_df = df.select("*").orderBy(timestamp)
+        spark_df = df.na.drop().select("*").orderBy(timestamp)
         
         for symbol in symbol:
             position = "Position"+symbol
@@ -490,7 +491,7 @@ class backtest:
     
     def momentum_portfolio_position(self, df, symbol, interval, period, momentum, sqlContext):
         
-        spark_df = df.select("*")
+        spark_df = df.na.drop().select("*")
         
         for symbol in symbol:
             spark_df = spark_df.select("*")\
@@ -502,7 +503,7 @@ class backtest:
     
             spark_df = spark_df.\
                         withColumn("Position"+symbol,F.signum(F.avg("returns"+symbol)\
-                        .over(Window.partitionBy().rowsBetween(-momentum,0))))
+                        .over(Window.partitionBy().rowsBetween(-momentum,Window.currentRow))))
     
             spark_df = spark_df.drop(symbol+"_shift","returns"+symbol).withColumnRenamed(symbol,"Close"+symbol)
         
@@ -692,7 +693,7 @@ class backtest:
             
         return depotId
     
-    def momentum_symbols(self, period):
+    def max_sector_symbols(self, period, n_sector, n_stock, distribution):
         """
         Find symbols for momentum strategy
 
@@ -715,30 +716,125 @@ class backtest:
             key = 'Rank C: 5 Day Performance'
         
         performance = data[key]
-        sector= max(performance.items(), key=operator.itemgetter(1))[0]
+        sector = [k for k,v in performance.items()][:n_sector]
         
-        if(sector == 'Communication Services'):
-            sector = 'Telecommunication Services'
+        for i in range(n_sector):
+            if(sector[i] == 'Communication Services'):
+                sector[i] = 'Telecommunication Services'
             
         df = pd.read_csv("symbols/constituents.csv", index_col='Symbol').drop(columns='Name')
     
-        symbol = df[df['Sector'] == sector].index.tolist()
-        share = [1/len(symbol) for i in range(len(symbol)-1)]
-        share.append(1 - sum(share))
+        symbol = df[df['Sector'].isin(sector)].index.tolist()
         
         pandas_history = yf.download(symbol,period=period,interval=period)
         
-        returns = (pandas_history.iloc[-1]['Close']/pandas_history.iloc[0]['Close'] - 1).dropna()
-        returns_sorted = [k for k, v in sorted(returns.items(), key=lambda item: item[1], reverse=True)]
+        returns = pandas_history['Close'].head(1).div(pandas_history['Open'].head(1)).T
+        returns.rename(columns={returns.columns[0]:"returns"}, inplace=True)
+        returns.index.rename('Symbol', inplace=True)
         
-        symbols_max = returns_sorted[:4]
+        symbols_max = (returns.sort_values('returns',ascending=False)).index.tolist()[:n_stock]
         
-        share = [1/len(symbols_max) for i in range(len(symbols_max)-1)]
-        share.append(1 - sum(share))
+        if(distribution == "equal"):
+            share = [1/len(symbols_max) for i in range(len(symbols_max)-1)]
+            share.append(1 - sum(share))
         
-        return symbols_max, share
+        if(distribution == "desc"):
+            share = [i for i in range(n_stock,0,-1)]
+            share = [i/sum(share) for i in share]
+            
+        return symbols_max, share, sector
     
-    def performance(self, startCap, commission, risk_free, strategy, interval, period, hdfs_path, sqlContext):
+    def min_pe_symbols(self, symbol):
+        """
+        Looks through all S&P500 comanies or through given list of stocks and finds the one
+        with highest performance and lowest pe ratio
+
+        Parameters
+        ----------
+        symbol : list of symbols has to be at least 2 companies or None
+        n_stock : number of stocks function gives out
+        distribution : distribution of shares, "equal" or "desc"
+        Returns
+        -------
+        list with symbols and corresponding shares
+        
+        """
+        # read in all S&P500 companies if no symbols given
+        if(symbol == None):
+            df = pd.read_csv("symbols/constituents.csv", index_col='Symbol').drop(columns='Name')
+            symbol = df.index.tolist()
+            return symbol
+        
+        # get start and end date
+        d = datetime.today() - timedelta(days=2)
+        weekday = d.strftime("%A")
+    
+        if(weekday == 'Saturday'):
+            d = d - timedelta(days=1)
+        if(weekday == 'Sunday'):
+            d = d - timedelta(days=2)
+    
+        d_start = d.strftime("%Y-%m-%d")
+        d_end = (d + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        # read in historical data from S&P500 companies
+        pandas_history = yf.download(symbol,start=d_start,end=d_end)
+        
+        # calculate newest performance and sort in descending order
+        returns = pandas_history['Close'].tail(1).div(pandas_history['Open'].tail(1)).T
+        returns.rename(columns={returns.columns[0]:"returns"}, inplace=True)
+        returns.index.rename('Symbol', inplace=True)
+        returns_list = (returns.sort_values('returns',ascending=False)).index.tolist()
+        
+        # calculate pe_ratios
+        close = pandas_history['Close'].tail(1).T
+        close.rename(columns={close.columns[0]:"pe_ratio"}, inplace=True)
+        close.index.rename('Symbol',inplace=True)
+        for i,row in close.iterrows():
+            eps = YahooFinancials(i).get_earnings_per_share()
+            if(eps == None):
+                close.drop(i, inplace=True)
+                continue
+            close.loc[i,'pe_ratio'] = row.pe_ratio/eps
+    
+        pe_list = (close.sort_values('pe_ratio',ascending=True)).index.tolist()
+    
+        # rank them according to performance and pe ratio
+        doc = {}
+        for j in range(len(returns_list)):
+            doc[returns_list[j]] = j
+        for i in range(len(pe_list)):
+            doc[pe_list[i]] = i
+            
+        symbol = [k for k, v in sorted(doc.items(), key=lambda item: item[1])]
+        
+        with open("symbol.txt", "w") as output:
+                output.write(str(symbol))
+    
+        return symbol
+    
+    def share_func(self, n):
+        """
+        Calculates shares for given number of stocks for 2 different distributions
+
+        Parameters
+        ----------
+        n : number of stocks
+
+        Returns
+        -------
+        equal : equally distributed
+        desc : descending
+
+        """
+        equal = [float(1/n) for i in range(n-1)]
+        equal.append(float(1) - sum(equal))
+    
+        desc = [float(i) for i in range(n,0,-1)]
+        desc = [float(i/sum(desc)) for i in desc]
+        return equal, desc
+    
+    def performance(self, startCap, commission, risk_free, strategy, interval, period, symbol, n_stock, hdfs_path, sqlContext):
         """
         Calculates performance of given strategy and performance of buy and hold strategy for the same stocks + shares
         so that one can compare if it would have been better to just buy and hold the stocks
@@ -763,97 +859,105 @@ class backtest:
 
         """
         # get symbol + share
-        symbol, share = self.momentum_symbols(period)
-        
-        # get historical data from yahoofincance
-        historical_pd = yf.download(symbol,period=period,interval=interval)
-        historical_pd = historical_pd['Close']
-        historical_pd.reset_index(drop=False, inplace=True)
-        historical_spark = sqlContext.createDataFrame(historical_pd)
-        
-        # get latest depotId
-        depotId = self.depotId_func(sqlContext, hdfs_path)
-        
-        # get market beta of individual stocks
-        beta = YahooFinancials(symbol).get_beta()
-        if("^GSPC" in symbol):
-            beta["^GSPC"] = 1.0
-            
+        #symbol_full_list = self.min_pe_symbols(symbol)
+        with open("symbol.txt", "r") as f:
+            symbol_full_list = f.read()
+        symbol_full_list = literal_eval(symbol_full_list)      
         # get market performance
         market = self.market_performance(interval, period, sqlContext, hdfs_path)
         
-        if(strategy[0] == "momentum"):
-            # calculate positions for momentum strategy
-            position1 = [self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[1], sqlContext)]
-            for i in range(2,len(strategy)):
-                pos = self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[i], sqlContext)
-                position1.append(pos)
-             # calculate performance for momentum strategy
-            depotId1 = [depotId]
-            performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free, market, beta)]
-            depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[1]),symbol,share)]
-            for i in range(1,len(position1)):
-                depotId += 1
-                depotId1.append(depotId)
-                depot1 = self.depot(depotId1[i], symbol, share, position1[i], startCap, commission, risk_free, market, beta)
-                performance_data.append(depot1)
-                data = (depotId1[i],startCap,strategy[0]+str(strategy[i+1]),symbol,share)
-                depot_data.append(data)
+        # get latest depotId
+        depotId = self.depotId_func(sqlContext, hdfs_path)
+          
+        # get market beta of individual stocks
+        beta = YahooFinancials(symbol_full_list[:max(n_stock)]).get_beta()
+        if("^GSPC" in symbol_full_list[:max(n_stock)]):
+            beta["^GSPC"] = 1.0
                 
-        if (strategy[0] == "mean_reverse"):
-            rsi_buy = strategy[1]
-            rsi_sell = strategy[2]
-            ibr_buy = strategy[3]
-            ibr_sell = strategy[4]
-            #calculate positions for mean reverse strategy
-            position1 = [self.mean_reverse_portfolio_position(symbol, interval, strategy[5], rsi_buy, rsi_sell, ibr_buy, ibr_sell,  sqlContext, hdfs_path)]
-            for i in range(6,len(strategy)):            
-                pos = self.mean_reverse_portfolio_position(symbol, interval, strategy[i], rsi_buy, rsi_sell, ibr_buy, ibr_sell,sqlContext, hdfs_path)    
-                position1.append(pos)
-             # calculate performance for mean reverse strategy        
-            depotId1 = [depotId]
-            performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free, market, beta)]
-            depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[5]),symbol,share)]
-            for i in range(5,len(position1)+4):
+        for n in n_stock:
+            symbol = symbol_full_list[:n]
+            shares = self.share_func(len(symbol))
+            # get historical data from yahoofincance
+            historical_pd = yf.download(symbol,period=period,interval=interval)
+            historical_pd = historical_pd['Close']
+            historical_pd.reset_index(drop=False, inplace=True)
+            historical_spark = sqlContext.createDataFrame(historical_pd)
+   
+            for share in shares:
+                
+                if(strategy[0] == "momentum"):
+                    # initialize position, depotId, performance for momentum strategy
+                    position_momentum = [self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[1], sqlContext)]
+                    depotId_momentum = [depotId]
+                    performance_data = [self.depot(depotId_momentum[0], symbol, share, position_momentum[0], startCap, commission, risk_free, market, beta)]
+                    depot_data = [(depotId_momentum[0],startCap,strategy[0]+str(strategy[1]),symbol,share)]
+                    
+                    for i in range(2,len(strategy)):
+                        # loop through rest of momentum strategy to get performance for other momentums
+                        pos = self.momentum_portfolio_position(historical_spark, symbol, interval, period, strategy[i], sqlContext)
+                        position_momentum.append(pos)
+                        depotId += 1
+                        depotId_momentum.append(depotId)
+                        performance_momentum = self.depot(depotId_momentum[i-1], symbol, share, position_momentum[i-1], startCap, commission, risk_free, market, beta)
+                        performance_data.append(performance_momentum)
+                        depot_momentum = (depotId_momentum[i-1],startCap,strategy[0]+str(strategy[i]),symbol,share)
+                        depot_data.append(depot_momentum)
+                        
+                if (strategy[0] == "mean_reverse"):
+                    rsi_buy = strategy[1]
+                    rsi_sell = strategy[2]
+                    ibr_buy = strategy[3]
+                    ibr_sell = strategy[4]
+                    #calculate positions for mean reverse strategy
+                    position1 = [self.mean_reverse_portfolio_position(symbol, interval, strategy[5], rsi_buy, rsi_sell, ibr_buy, ibr_sell,  sqlContext, hdfs_path)]
+                    for i in range(6,len(strategy)):            
+                        pos = self.mean_reverse_portfolio_position(symbol, interval, strategy[i], rsi_buy, rsi_sell, ibr_buy, ibr_sell,sqlContext, hdfs_path)    
+                        position1.append(pos)
+                     # calculate performance for mean reverse strategy        
+                    depotId1 = [depotId]
+                    performance_data = [self.depot(depotId1[0], symbol, share, position1[0], startCap, commission, risk_free, market, beta)]
+                    depot_data = [(depotId1[0],startCap,strategy[0]+str(strategy[5]),symbol,share)]
+                    for i in range(5,len(position1)+4):
+                        depotId += 1
+                        depotId1.append(depotId)
+                        depot1 = self.depot(depotId1[i-4], symbol, share, position1[i-4], startCap, commission, risk_free, market, beta)
+                        performance_data.append(depot1)
+                        data = (depotId1[i-4],startCap,strategy[0]+str(strategy[i+1]),symbol,share)
+                        depot_data.append(data)
+         
+                # performance for buy and hold strategy
                 depotId += 1
-                depotId1.append(depotId)
-                depot1 = self.depot(depotId1[i-4], symbol, share, position1[i-4], startCap, commission, risk_free, market, beta)
-                performance_data.append(depot1)
-                data = (depotId1[i-4],startCap,strategy[0]+str(strategy[i+1]),symbol,share)
-                depot_data.append(data)
- 
-        # performance for buy and hold strategy
-        depotId2 = depotId + 1
-        position2 = self.buy_and_hold_portfolio_position(historical_spark, symbol, interval, period, sqlContext, hdfs_path)
-        depot2 = self.depot(depotId2, symbol, share, position2, startCap, commission, risk_free, market, beta)
-        performance_data.append(depot2)
-        data = (depotId2,startCap,"Buy and Hold",symbol,share)
-        depot_data.append(data)
-        
-        # write performance and depot data to hdfs
-        schema_performance = StructType() \
-                .add("DepotId", LongType())\
-                .add("Value",DoubleType())\
-                .add("Alpha", DoubleType())\
-                .add("Beta", DoubleType())\
-                .add("Start-Capital", DoubleType())\
-                .add("Profit", DoubleType())\
-                .add("Start-Date",DateType())\
-                .add("End-Date",DateType())\
-                .add("Trades", LongType())\
-                .add("Performance_Strategy", DoubleType())\
-                .add("Performance_S&P500", DoubleType())
-        df_performance = sqlContext.createDataFrame(performance_data,schema_performance)
-        df_performance.write.save(hdfs_path+"/performance", format='parquet', mode='append')
-        
-        schema_depot = StructType() \
-                .add("DepotId", LongType())\
-                .add("Start-Caputal",DoubleType())\
-                .add("Strategy", StringType())\
-                .add("ISIN", ArrayType(StringType()))\
-                .add("Share", ArrayType(DoubleType()))
-        df_depot = sqlContext.createDataFrame(depot_data,schema_depot)
-        df_depot.write.save(hdfs_path+"/depot", format='parquet', mode='append')
+                position_bnh = self.buy_and_hold_portfolio_position(historical_spark, symbol, interval, period, sqlContext, hdfs_path)
+                performance_bnh = self.depot(depotId, symbol, share, position_bnh, startCap, commission, risk_free, market, beta)
+                performance_data.append(performance_bnh)
+                depot_bnh = (depotId,startCap,"Buy and Hold",symbol,share)
+                depot_data.append(depot_bnh)
+                depotId += 1
+            
+                # write performance and depot data to hdfs
+                schema_performance = StructType() \
+                        .add("DepotId", LongType())\
+                        .add("Value",DoubleType())\
+                        .add("Alpha", DoubleType())\
+                        .add("Beta", DoubleType())\
+                        .add("Start-Capital", DoubleType())\
+                        .add("Profit", DoubleType())\
+                        .add("Start-Date",DateType())\
+                        .add("End-Date",DateType())\
+                        .add("Trades", LongType())\
+                        .add("Performance_Strategy", DoubleType())\
+                        .add("Performance_S&P500", DoubleType())
+                df_performance = sqlContext.createDataFrame(performance_data,schema_performance)
+                df_performance.write.save(hdfs_path+"/performance", format='parquet', mode='append')
+                
+                schema_depot = StructType() \
+                        .add("DepotId", LongType())\
+                        .add("Start-Caputal",DoubleType())\
+                        .add("Strategy", StringType())\
+                        .add("ISIN", ArrayType(StringType()))\
+                        .add("Share", ArrayType(DoubleType()))
+                df_depot = sqlContext.createDataFrame(depot_data,schema_depot)
+                df_depot.write.save(hdfs_path+"/depot", format='parquet', mode='append')
         
         return performance_data,depot_data
     
@@ -1044,10 +1148,13 @@ class realtime:
                                            trades_total, symbol, share, commission, strategy, sqlContext)
             depot_b = self.realtime_loop(value_b, datetime_b, moneyForInvesting_list_b, moneyInStocks_list_b, stocksOwned_b,\
                                       trades_total_b, symbol, share, commission, strategy_b, sqlContext)
+                
             value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total = depot_strategy
             value_b, datetime_b, moneyForInvesting_list_b, moneyInStocks_list_b, stocksOwned_b, trades_total_b = depot_b
+            
             current_datetime = datetime[0]
             if(last_datetime == current_datetime):
+                print("no new data")
                 continue
             else:
                 print(datetime[0],value,value_b)
