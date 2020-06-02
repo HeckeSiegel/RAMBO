@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
+from pyspark.sql import functions as F
 from pyspark.sql.types import *
 from lib import sparkStructuredStreaming
 import sys
@@ -7,7 +7,7 @@ import numpy as np
 import datetime
 from pyspark.sql.window import Window
 
-""" 
+"""
 Spark Stream for robo visor
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar robo_visor.py 
 Replace "C:" with the path to your elasticsearch-hadoop directory
@@ -40,8 +40,8 @@ selectDF = parsedDF \
 selectDF= selectDF.select(get_datetime("latestUpdate").cast("Timestamp").alias("Datetime"),"latestPrice","symbol")
 
 # write into hdfs     
-sss.write_hdfs(selectDF,hdfs_path, output_dir)
-#sss.write_console(selectDF)
+#sss.write_hdfs(selectDF,hdfs_path, output_dir)
+sss.write_console(selectDF)
 
 spark.streams.awaitAnyTermination()
 
