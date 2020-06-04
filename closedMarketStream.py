@@ -47,8 +47,8 @@ selectDF_quotes = parsedDF_quotes \
         .select(F.explode(F.array("quote_data")))\
         .select("col.*")
         
-selectDF_quotes_hdfs = selectDF_quotes.select(simulate_time("latestUpdate").cast("Timestamp").alias("Datetime"),simulate_price("latestPrice").cast("float").alias("latestPrice"),"symbol")
-selectDF_quotes_es = selectDF_quotes.select(get_id_now("latestUpdate").alias("depotid"), simulate_time("latestUpdate").cast("String").alias("date"),simulate_price("latestPrice").alias("latestPrice"),"symbol")
+selectDF_quotes_hdfs = selectDF_quotes.select(simulate_time("latestUpdate").cast("Timestamp").alias("Datetime"),simulate_price("latestPrice").alias("latestPrice"),"symbol")
+selectDF_quotes_es = selectDF_quotes.select(get_id_now("latestUpdate").alias("depotid"), simulate_time("latestUpdate").cast("String").alias("date"),simulate_price("latestPrice").cast("float").alias("latestPrice"),"symbol")
 
 # news
 selectDF_news = parsedDF_news \
@@ -82,7 +82,6 @@ selectDF_company = parsedDF_company \
         .select(F.explode(F.array("company_data")))\
         .select("col.*")\
         .withColumn("depotid", get_id_now("symbol"))\
-        .withColumn("date",simulate_time("symbol").cast("String"))\
         .withColumn("esid",F.concat("symbol","depotid"))
 
 # write into hdfs     

@@ -842,15 +842,15 @@ class backtest:
         desc : descending
 
         """
-        #equal = [round(float(1/n),2) for i in range(n-1)]
-        #equal.append(round(float(1) - sum(equal), 2))
+        equal = [round(float(1/n),2) for i in range(n-1)]
+        equal.append(round(float(1) - sum(equal), 2))
     
-        desc = [float(i) for i in range(n,0,-1)]
-        desc = [round(float(i/sum(desc)), 2) for i in desc]
-        if(sum(desc) > 1):
-            desc[0] -= (sum(desc)-1)
+        #desc = [float(i) for i in range(n,0,-1)]
+        #desc = [round(float(i/sum(desc)), 2) for i in desc]
+        if(sum(equal) > 1):
+            equal[0] -= (sum(equal)-1)
             
-        return [desc]
+        return [equal]
     
     def get_eps(self,symbol):
         """
@@ -1596,24 +1596,11 @@ class backtest:
         while(day <= end):
             
             # need prior day to get results from backtesting
-            if(hdfs_dir == ""):
-                day_prior = day - timedelta(days=2)
+
+            day_prior = day - timedelta(days=1)
                 
-                if(day == date(2020,5,26)):
-                    day_prior = date(2020,5,21)
-                
-                if(day == date(2020,5,27)):
-                    day_prior = date(2020,5,22)
-                
-                weekday = day.strftime("%A")
-                if(weekday == "Tuesday"):
-                    day_prior -= timedelta(days=2)
-                    
-            else:
-                day_prior = day - timedelta(days=1)
-                
-                if(day_prior == date(2020,5,25)):
-                    day_prior = date(2020,5,22)
+            if(day_prior == date(2020,5,25)):
+                day_prior = date(2020,5,22)
                 
                 # make sure that it's not trying to stream quote data from weekend
             weekday = day.strftime("%A")
@@ -1625,6 +1612,9 @@ class backtest:
                 day_prior -= timedelta(days=1)
             if(weekday == 'Monday'):
                 day_prior -= timedelta(days=2)
+                
+            if(day == date(2020,5,25)):
+                day += timedelta(days=1)
             
             # see if there was already backtesting, if yes use value and total number of trades
             try:
@@ -1648,6 +1638,7 @@ class backtest:
             strategy = best_depot.Strategy
             
             # market performance and beta of stocks
+            print(day, day+timedelta(days=1))
             market = self.market_performance(interval, day, (day + timedelta(days=1)), sqlContext, hdfs_path)
             try:
                 beta = YahooFinancials(symbol).get_beta()
@@ -1703,8 +1694,6 @@ class backtest:
             df_depot.write.save(hdfs_path+"/backtest/depot_best"+hdfs_dir, format='parquet', mode='append')
 
             day += timedelta(days=1)
-            if(day == date(2020,5,25)):
-                day += timedelta(days=1)
     
     
     def full_backtest(self, startCap, startCap_market, commission, risk_free, strategy, interval, start, end, period, n_stock, hdfs_path, sqlContext, best_of, mode):
@@ -1733,11 +1722,11 @@ class backtest:
             # historical data
             df_daily_loop = self.get_historical_daily(None, end, n_days)
             df_minute = self.get_historical_minute(None, start, end)
-            df_daily_best = self.get_historical_daily(None, end+timedelta(days=2), n_days+1)
+            df_daily_best = self.get_historical_daily(None, end+timedelta(days=1), n_days+1)
             
             # backtesting with static strategies
             self.performance_loop(df_daily_loop, df_minute, period, startCap, startCap_market, commission, risk_free, strategy, interval, start, end, n_stock, hdfs_path, sqlContext,hdfs_dir_static, best_of)
-            self.performance_best(df_daily_best, startCap, startCap_market, start+timedelta(days=1), end+timedelta(days=1), commission, risk_free, interval, hdfs_path, sqlContext, hdfs_dir_static)
+            self.performance_best(df_daily_best, startCap, startCap_market, start, end, commission, risk_free, interval, hdfs_path, sqlContext, hdfs_dir_static)
             
         if(mode == "static_no_best"):
             # historical data
@@ -1790,8 +1779,8 @@ class realtime:
         if(weekday == 'Sunday'):
             day_prior -= timedelta(days=2)
     
-        best_performance = sqlContext.read.format('parquet').load(hdfs_path+"/backtest/performance_full_ml/"+day_prior.strftime("%Y%m%d")).orderBy(F.col("Performance_Strategy").desc()).head()
-        best_depot = sqlContext.read.format('parquet').load(hdfs_path+"/backtest/depot_full_ml/"+day_prior.strftime("%Y%m%d")).filter(F.col("DepotId")==best_performance.DepotId).head()
+        best_performance = sqlContext.read.format('parquet').load(hdfs_path+"/backtest/performance_full/"+day_prior.strftime("%Y%m%d")).orderBy(F.col("Performance_Strategy").desc()).head()
+        best_depot = sqlContext.read.format('parquet').load(hdfs_path+"/backtest/depot_full/"+day_prior.strftime("%Y%m%d")).filter(F.col("DepotId")==best_performance.DepotId).head()
     
         symbol_strategy = best_depot.Symbol_Strategy
         df_daily = backtest().get_historical_daily(None, day, max(symbol_strategy)+1)
@@ -1832,6 +1821,32 @@ class realtime:
         start_cmd = "start cmd /k producer.cmd \n"
         with open("producer_start.bat", "w") as f:
                 f.write(start_cmd)
+                
+    def write_producer_batch_parallel(self,symbol,sandbox):
+        """
+        Writes script to run kafka producer and stream quotes
+
+        Parameters
+        ----------
+        symbol : list of symbols
+
+        Returns
+        -------
+        None.
+
+        """
+        start_cmd = ""
+        
+        for symbol in symbol:
+            txt = ":loop \n java -jar iex_kafka_producer-jar-with-dependencies.jar \"%s\" \"127.0.0.1:9092\" \"1\" true \n goto loop" % (symbol)
+            
+            with open("producer"+symbol+".cmd", "w") as f:
+                f.write(txt)
+                
+                start_cmd += "start cmd /k producer"+symbol+".cmd \n"
+                
+        with open("producer_start.bat", "w") as f:
+            f.write(start_cmd)
     
     def buy_and_hold(self, df, symbol, *args):
         """
@@ -2033,10 +2048,10 @@ class realtime:
         init = self.realtime_init(symbol, share, startCap, commission, strategy, sqlContext, directory)
         value, date, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, cash = init
         
-        date_es = date[0].strftime("%Y-%m-%d"'T'"%H:%M:%S")
+        date_es = date[0]
         # first entry for depot index
-        keys_depot = ["value", "date", "depotid"]
-        vals_depot = [value, date_es, depotid]
+        keys_depot = ["value", "date", "depotid", "trades"]
+        vals_depot = [value, date_es, depotid, trades_total]
         strategy_dict_depot = dict(zip(keys_depot,vals_depot))
         res_depot = es.index(index="depot"+es_index, body=strategy_dict_depot)
         print(strategy_dict_depot)
@@ -2065,14 +2080,13 @@ class realtime:
             current_datetime = date[0]
             
             if(last_datetime == current_datetime):
-                print("no new data")
                 continue
             else:
                 # write values into elasticsearch for visualisation
-                date_es = date[0].strftime("%Y-%m-%d"'T'"%H:%M:%S")
+                date_es = date[0]
                 # first entry for depot index
-                keys_depot = ["value", "date", "depotid"]
-                vals_depot = [value, date_es, depotid]
+                keys_depot = ["value", "date", "depotid", "trades"]
+                vals_depot = [value, date_es, depotid, trades_total]
                 strategy_dict_depot = dict(zip(keys_depot,vals_depot))
                 res_depot = es.index(index="depot"+es_index, body=strategy_dict_depot)
                 print(strategy_dict_depot)
