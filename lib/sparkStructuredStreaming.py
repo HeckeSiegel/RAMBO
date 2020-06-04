@@ -1880,7 +1880,7 @@ class realtime:
         
         return position.select("latestPrice","Datetime","Position").orderBy("Datetime", ascending = False).na.drop()
     
-    def realtime_init(self, symbol, share, startCap, commission, strategy, sqlContext, sb):
+    def realtime_init(self, symbol, share, startCap, commission, strategy, sqlContext, sb, trades):
         """
         Initialize variables for realtime trading simulation
 
@@ -1911,7 +1911,10 @@ class realtime:
         # number of stocks owned for each company
         stocksOwned = []
         # total number of trades
-        trades_total = 0
+        if(trades==None):
+            trades_total = 0
+        else:
+            trades_total = trades
         # money which can be invested
         moneyForInvesting_list = []
         moneyForInvesting = 0
@@ -2012,7 +2015,7 @@ class realtime:
         
         return value, datetime, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, moneyForInvesting
     
-    def realtime(self, startCap, day, sandbox, commission, sqlContext):
+    def realtime(self, startCap, day, sandbox, commission, sqlContext, trades):
     
         depotid = datetime.now().strftime("%Y%m%d")
         if(sandbox == True):
@@ -2045,7 +2048,7 @@ class realtime:
         else:
             directory = ""
             
-        init = self.realtime_init(symbol, share, startCap, commission, strategy, sqlContext, directory)
+        init = self.realtime_init(symbol, share, startCap, commission, strategy, sqlContext, directory, trades)
         value, date, moneyForInvesting_list, moneyInStocks_list, stocksOwned, trades_total, cash = init
         
         date_es = date[0]
@@ -2089,7 +2092,7 @@ class realtime:
                 vals_depot = [value, date_es, depotid, trades_total]
                 strategy_dict_depot = dict(zip(keys_depot,vals_depot))
                 res_depot = es.index(index="depot"+es_index, body=strategy_dict_depot)
-                print(strategy_dict_depot)
+                print(strategy_dict_depot,"stocks: ",symbol, stocksOwned, "cash",cash)
     
                 # first entry for pie chart index
                 pie = [int(x/100) for x in moneyInStocks_list]

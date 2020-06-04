@@ -44,14 +44,14 @@ selectDF_quotes = parsedDF_quotes \
         .select(F.explode(F.array("quote_data")))\
         .select("col.*")
         
-selectDF_quotes_hdfs = selectDF_quotes.select(simulate_time("latestUpdate").cast("String").alias("Datetime"),"latestPrice","symbol")
-selectDF_quotes_es = selectDF_quotes.select(get_id_now("latestUpdate").alias("depotid"), simulate_time("latestUpdate").cast("String").alias("date"),"latestPrice","symbol")
+selectDF_quotes_hdfs = selectDF_quotes.select(get_datetime("latestUpdate").cast("String").alias("Datetime"),"latestPrice","symbol")
+selectDF_quotes_es = selectDF_quotes.select(get_id_now("latestUpdate").alias("depotid"), get_datetime("latestUpdate").cast("String").alias("date"),"latestPrice","symbol")
 
 # news
 selectDF_news = parsedDF_news \
         .select(F.explode(F.array("news_data")))\
         .select("col.*") \
-        .dropna().dropDuplicates(["headline"])
+        .dropna()
         
 ##################### sentiment analysis of news #############################
 sia = SentimentIntensityAnalyzer()
