@@ -58,3 +58,10 @@ function realtime will write and run these automatically
 ```
 note: this only works if you added python to your windows path before, otherwise just use e.g. Anaconda Prompt
 ```
+
+* If you want to run the Robovisor:
+1. Open robo_visor.ipynb in jupyter notebook
+2. Do backtesting with desired parameters
+3. Open command prompt and cd into "robo_visor" folder
+4. Type in spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar openMarketStream.py (if market is open, otherwise use closedMarketStream.py)
+5. When marketStream is running you can run the function realtime from jupyter notebook to simulate trading
