@@ -51,9 +51,10 @@ function realtime will write and run these automatically
 ## Usage
 
 * If you want to run sparkStructuredStreaming_quotes.py:
-1. Open command prompt
-2. cd into folder "examples"
-3. type in : spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_quotes.py "127.0.0.1:9092" (replace "C:" with the path to your elasticsearch-hadoop directory)
+1. Choose in source coude with e.g. Spyder the desired output sink (hdfs, console or elasticsearch -> more than 1 is possible)
+2. Open command prompt
+3. cd into folder "examples"
+4. type in : spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar sparkStructuredStreaming_quotes.py "127.0.0.1:9092" (replace "C:" with the path to your elasticsearch-hadoop directory)
 ```
 note: this only works if you added python to your windows path before, otherwise just use e.g. Anaconda Prompt
 ```
