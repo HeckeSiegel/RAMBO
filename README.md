@@ -21,8 +21,8 @@ Spark Structured Streaming application to analyze financial market data.
 2. Folder "robo_visor" contains the Robovisor use case, which trades in the stock maket using different strategies:
 * iex_kafka_producer-jar-with-dependencies.jar : kafka producer to stream real data
 * iex_kafka_producer-jar-with-dependencies-sandbox.jar : kafka producer to stream fake data
-* closedMarketStream.py : use this between 10 pm and 3:30 pm next day to simulate market data outside of market hours
-* openMarketStream.py : use this between 3:30 pm and 10 pm during market hours to get real data
+* closedMarketStream.py : streams from all topics, writes some of them directly into elasticsearch, writes others into hdfs for realtime trading. Use this between 10 pm and 3:30 pm next day to simulate market data outside of market hours
+* openMarketStream.py : Same as closedMarketStream.py, but use this between 3:30 pm and 10 pm during market hours to get real data
 * robo_visor.ipynb : Jupyter notebook with exaples on how to use backtesting and realtime functions
 ```
 More information and how to run each script is written in each source code respectively
