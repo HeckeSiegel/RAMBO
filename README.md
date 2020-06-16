@@ -20,6 +20,6 @@ Spark Structured Streaming application to analyze financial market data.
 * sparkStructuredStreaming_company.py : stream from topic "company" write into either console, hdfs or elasticsearch sink
 * sparkStructuredStreaming_news.py : stream from topic "news", do sentiment analysis, write into either console, hdfs or elasticsearch sink
 * sparkStructuredStreaming_quotes.py : stream from topic "quotes" write into either console, hdfs or elasticsearch sink
-```sh
+```
 More information and how to run each script is written in source code
 ```
