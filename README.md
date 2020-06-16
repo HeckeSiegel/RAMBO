@@ -50,7 +50,7 @@ function realtime will write and run these automatically
 <!-- USAGE EXAMPLES -->
 ## Usage
 
-* If you want to run sparkStructuredStreaming_quotes.py:
+* If you want to run e.g. sparkStructuredStreaming_quotes.py:
 1. Choose in source coude with e.g. Spyder the desired output sink (hdfs, console or elasticsearch -> more than 1 is possible)
 2. Open command prompt
 3. cd into folder "examples"
