@@ -4,7 +4,6 @@
 * [About the Project](#about-the-project)
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
-  * [Installation](#installation)
 * [Usage](#usage)
 
 
@@ -47,3 +46,6 @@ function realtime will write and run these automatically
 * Elasticsearch-Hadoop 7.6.2 or higher
 * Kibana 7.6.2 or higher
 * Python 3.7 or higher
+
+<!-- USAGE EXAMPLES -->
+## Usage
