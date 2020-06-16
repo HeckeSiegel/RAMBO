@@ -2,7 +2,6 @@
 ## Table of Contents
 
 * [About the Project](#about-the-project)
-  * [Built With](#built-with)
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
   * [Installation](#installation)
@@ -25,6 +24,19 @@ Spark Structured Streaming application to analyze financial market data.
 * openMarketStream.py : use this between 3:30 pm and 10 pm during market hours to get real data
 * robo_visor.ipynb : Jupyter notebook with exaples on how to use backtesting and realtime functions
 ```
-More information and how to run each script is written in source code
+More information and how to run each script is written in each source code respectively
 ```
 3. Folder "lib" contains sparkStructuredStreaming library with all needed functions 
+
+<!-- GETTING STARTED -->
+## Getting Started
+
+### Prerequisites
+
+* Hadoop 2.9.1 or higher
+* Kafka 2.11 or higher
+* Spark 2.4.5 or higher
+* Elasticsearch 7.6.2 or higher
+* Elasticsearch-Hadoop 7.6.2 or higher
+* Kibana 7.6.2 or higher
+* Python 3.7 or higher
