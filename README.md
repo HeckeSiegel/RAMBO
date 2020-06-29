@@ -84,3 +84,11 @@ All of these examples are functions from the robovisor folder.
 - Keeps track of how many trades have been made each day
 
 ![simulation](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/simulation.png)
+
+### Realtime Dashboard
+- Built with Kibana
+- Updates in near realtime, here is only a picture of one moment
+
+![dashboard1](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/dashboard1.png)
+![dashboard1](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/dashboard2.png)
+![dashboard1](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/dashboard3.png)
