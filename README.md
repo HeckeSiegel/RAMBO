@@ -69,9 +69,18 @@ note: this only works if you added python to your windows path before, otherwise
 
 <!-- EXAMPLES -->
 ## Examples
+All of these examples are functions from the robovisor folder.
 
 ### Backtesting
-- Parameters you can change: start- and end-date of backtesting, number of companies in portfolio, minutes for momentum strategy
+- Parameters you can change: start capital, start- and end-date of backtesting, number of companies in portfolio, minutes for momentum strategy
 - Automatically also backtests "buy and hold" strategy for same stocks and compares it with momentum strategies
 - Produces following lists and saves them into hdfs in folder /backtest/performance_full/yyyymmdd (eg. 20200507) and /backtest/depot_full/yyyymmdd
+
 ![backtest](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/backtest.png)
+
+### Trading Simulation
+- The backtesting function also automatically runs a trading simulation during the specified time frame, where for each day it chooses the strategy which worked best from the day before and uses this to trade during this day
+- Calculates the current value of the portfolio for each day and compares it to the S&P500 market value
+- Keeps track of how many trades have been made each day
+
+![simulation](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/simulation.png)
