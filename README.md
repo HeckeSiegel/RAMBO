@@ -5,12 +5,13 @@
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
 * [Usage](#usage)
+* [Examples](#usage)
 
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Spark Structured Streaming application to analyze financial market data. 
+Spark Structured Streaming application to analyze financial market data (Quotes, Newsfeeds, Financial Statements) in realtime to support decision processes for fund and portfolio managers (Buy-Side in Financial Markets).
 
 1. Folder "examples" contains several python scripts that can be used to stream data from Kafka topics and write them into different sinks:
 * alphaVantageSector.py : get sector data from AlphaVantage, write into elasticsearch
@@ -65,3 +66,21 @@ note: this only works if you added python to your windows path before, otherwise
 3. Open command prompt and cd into "robo_visor" folder
 4. Type in spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.5 --jars C:\elasticsearch-hadoop-7.6.2\dist\elasticsearch-spark-20_2.11-7.6.2.jar openMarketStream.py (if market is open, otherwise use closedMarketStream.py)
 5. When marketStream is running you can run the function realtime from jupyter notebook to simulate trading
+
+<!-- EXAMPLES -->
+## Examples
+All of these examples are functions from the robovisor folder.
+
+### Backtesting
+- Parameters you can change: start capital, start- and end-date of backtesting, number of companies in portfolio, minutes for momentum strategy
+- Automatically also backtests "buy and hold" strategy for same stocks and compares it with momentum strategies
+- Produces following lists and saves them into hdfs in folder /backtest/performance_full/yyyymmdd (eg. 20200507) and /backtest/depot_full/yyyymmdd
+
+![backtest](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/backtest.png)
+
+### Trading Simulation
+- The backtesting function also automatically runs a trading simulation during the specified time frame, where for each day it chooses the strategy which worked best from the day before and uses this to trade during this day
+- Calculates the current value of the portfolio for each day and compares it to the S&P500 market value
+- Keeps track of how many trades have been made each day
+
+![simulation](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/simulation.png)
