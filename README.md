@@ -11,7 +11,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Spark Structured Streaming application to analyze financial market data. 
+Spark Structured Streaming application to analyze financial market data (Quotes, Newsfeeds, Financial Statements) in realtime to support decision processes for fund and portfolio managers (Buy-Side in Financial Markets).
 
 1. Folder "examples" contains several python scripts that can be used to stream data from Kafka topics and write them into different sinks:
 * alphaVantageSector.py : get sector data from AlphaVantage, write into elasticsearch
