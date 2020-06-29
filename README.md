@@ -69,3 +69,9 @@ note: this only works if you added python to your windows path before, otherwise
 
 <!-- EXAMPLES -->
 ## Examples
+
+### Backtesting
+- Parameters you can change: start- and end-date of backtesting, number of companies in portfolio, minutes for momentum strategy
+- Automatically also backtests "buy and hold" strategy for same stocks and compares it with momentum strategies
+- Produces following lists and saves them into hdfs in folder /backtest/performance_full/yyyymmdd (eg. 20200507) and /backtest/depot_full/yyyymmdd
+![backtest](https://github.com/HeckeSiegel/RAMBO/blob/master/pictures/backtest.png)
